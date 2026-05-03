@@ -6,7 +6,9 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { INVENTORY_LIST_SELECT, serializeInventoryItem } from "@/lib/inventory-serialization";
 
-const FULL_LOAD_LIMIT = Number(process.env.INVENTORY_FULL_LOAD_LIMIT ?? "2000");
+const FULL_LOAD_LIMIT = Number(
+  process.env.INVENTORY_BULK_LOAD_LIMIT ?? process.env.INVENTORY_FULL_LOAD_LIMIT ?? "120"
+);
 
 export async function GET() {
   const session = await auth();

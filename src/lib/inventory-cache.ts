@@ -3,9 +3,11 @@ import type { InventoryClientItem } from "@/app/inventory/client";
 import { prisma } from "@/lib/prisma";
 import { INVENTORY_LIST_SELECT, serializeInventoryItem } from "@/lib/inventory-serialization";
 
-const INVENTORY_FULL_LOAD_ENV = Number(process.env.INVENTORY_FULL_LOAD_LIMIT ?? "2000");
+const INVENTORY_INITIAL_LOAD_ENV = Number(
+  process.env.INVENTORY_INITIAL_LOAD_LIMIT ?? process.env.INVENTORY_FULL_LOAD_LIMIT ?? "60"
+);
 const MAX_CACHE_TAKE =
-  Number.isFinite(INVENTORY_FULL_LOAD_ENV) && INVENTORY_FULL_LOAD_ENV > 0 ? INVENTORY_FULL_LOAD_ENV : 200;
+  Number.isFinite(INVENTORY_INITIAL_LOAD_ENV) && INVENTORY_INITIAL_LOAD_ENV > 0 ? INVENTORY_INITIAL_LOAD_ENV : 60;
 
 const fetchInventorySnapshot = unstable_cache(
   async (ownerId: string | null, take: number) => {
