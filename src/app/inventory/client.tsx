@@ -142,6 +142,8 @@ const drawingColors = ["#f87171", "#facc15", "#4ade80", "#38bdf8", "#f472b6", "#
 const THUMBNAILS_ENABLED = true;
 const THUMBNAIL_PREFETCH_LIMIT = 40; // evita descargas masivas por pagina
 const THUMBNAIL_FETCH_GAP_MS = 120;
+const NOTIFICATIONS_PAGE_SIZE = 30;
+const NOTIFICATIONS_POLL_INTERVAL_MS = 20_000;
 
 const makePhotoKey = (file: File) => `${file.name}-${file.size}-${file.lastModified}`;
 
@@ -402,6 +404,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [downloading, setDownloading] = useState(false);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [notificationsPage, setNotificationsPage] = useState(1);
+  const [notificationsTotal, setNotificationsTotal] = useState(0);
+  const [notificationsTotalPages, setNotificationsTotalPages] = useState(1);
+  const [notificationsSearch, setNotificationsSearch] = useState("");
   const [toastNotification, setToastNotification] = useState<NotificationItem | null>(null);
   const [notificationViewer, setNotificationViewer] = useState<NotificationViewerState | null>(null);
   const [updatingIds, setUpdatingIds] = useState<string[]>([]);
@@ -500,7 +506,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   }, [isManualOnly, isMobile]);
 
   const toggleSection = useCallback((section: SectionKey) => {
-    if (!isMobile || isManualOnly) return;
+    if (isManualOnly) return;
+    if (section !== "notifications" && !isMobile) return;
     setSectionVisibility((prev) => ({ ...prev, [section]: !prev[section] }));
   }, [isManualOnly, isMobile]);
 
@@ -515,29 +522,48 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     }, 6000);
   }, []);
 
-  const fetchNotifications = useCallback(async (options?: { silent?: boolean }) => {
+  const fetchNotifications = useCallback(async (options?: { silent?: boolean; page?: number; search?: string }) => {
     const silent = Boolean(options?.silent);
+    const targetPage = Math.max(1, options?.page ?? notificationsPage);
+    const useOverrideSearch = Boolean(options && Object.prototype.hasOwnProperty.call(options, "search"));
+    const searchTerm = (useOverrideSearch ? options?.search ?? "" : notificationsSearch).trim();
     if (!silent && isMountedRef.current) {
       setNotificationsLoading(true);
     }
     try {
-      const res = await fetch("/api/notifications?limit=12", { cache: "no-store" });
+      const params = new URLSearchParams({
+        page: String(targetPage),
+        pageSize: String(NOTIFICATIONS_PAGE_SIZE)
+      });
+      if (searchTerm.length) {
+        params.set("search", searchTerm);
+      }
+
+      const res = await fetch(`/api/notifications?${params.toString()}`, { cache: "no-store" });
       if (!res.ok) {
         throw new Error("No se pudieron obtener las notificaciones");
       }
       const data = await res.json().catch(() => ({}));
       const list: NotificationItem[] = Array.isArray(data.notifications) ? data.notifications : [];
+      const total = Number(data.total ?? list.length);
+      const totalPages = Math.max(1, Number(data.totalPages ?? Math.ceil(total / NOTIFICATIONS_PAGE_SIZE)));
+      const serverPage = Math.max(1, Number(data.page ?? targetPage));
       if (!isMountedRef.current) return;
       setNotifications(list);
-      if (!list.length) return;
-      const newest = list[0];
-      if (!lastNotificationIdRef.current) {
-        lastNotificationIdRef.current = newest.id;
-        return;
-      }
-      if (lastNotificationIdRef.current !== newest.id) {
-        lastNotificationIdRef.current = newest.id;
-        triggerNotificationToast(newest);
+      setNotificationsTotal(Number.isFinite(total) ? total : list.length);
+      setNotificationsTotalPages(Number.isFinite(totalPages) ? totalPages : 1);
+      setNotificationsPage(serverPage);
+
+      if (!searchTerm.length && serverPage === 1 && list.length) {
+        const newest = list[0];
+        if (!lastNotificationIdRef.current) {
+          lastNotificationIdRef.current = newest.id;
+          return;
+        }
+        if (lastNotificationIdRef.current !== newest.id) {
+          lastNotificationIdRef.current = newest.id;
+          triggerNotificationToast(newest);
+        }
       }
     } catch (err: any) {
       if (!silent && isMountedRef.current) {
@@ -548,7 +574,27 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         setNotificationsLoading(false);
       }
     }
-  }, [triggerNotificationToast]);
+  }, [notificationsPage, notificationsSearch, triggerNotificationToast]);
+
+  const handleNotificationsSearchSubmit = useCallback(
+    (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      void fetchNotifications({ silent: false, page: 1 });
+    },
+    [fetchNotifications]
+  );
+
+  const clearNotificationsSearch = useCallback(() => {
+    setNotificationsSearch("");
+    void fetchNotifications({ silent: false, page: 1, search: "" });
+  }, [fetchNotifications]);
+
+  const goToNotificationPage = useCallback(
+    (page: number) => {
+      void fetchNotifications({ silent: false, page });
+    },
+    [fetchNotifications]
+  );
 
   useEffect(() => {
     return () => {
@@ -575,7 +621,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       return undefined;
     }
     fetchNotifications({ silent: true });
-    const interval = setInterval(() => fetchNotifications({ silent: true }), 20000);
+    const interval = setInterval(() => fetchNotifications({ silent: true }), NOTIFICATIONS_POLL_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [fetchNotifications, isManualOnly]);
 
@@ -2564,7 +2610,13 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     };
   }, [thumbnailsActive, filteredItems, ensureThumbnail, thumbnailCache, thumbnailLoadingIds]);
 
-  
+  const notificationsRangeStart =
+    notificationsTotal > 0 && notifications.length > 0
+      ? (notificationsPage - 1) * NOTIFICATIONS_PAGE_SIZE + 1
+      : 0;
+  const notificationsRangeEnd =
+    notificationsRangeStart > 0 ? notificationsRangeStart + notifications.length - 1 : 0;
+
 
   return (
     <>
@@ -2674,7 +2726,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="text-lg font-semibold">Notificaciones Mercado Libre</h2>
-              <p className="text-xs text-slate-400">Sincronizamos cada 20 segundos o cuando hagas clic en actualizar.</p>
+              <p className="text-xs text-slate-400">Historial completo con busqueda y paginacion de 30 en 30.</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <button
@@ -2688,75 +2740,139 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
               <button
                 type="button"
                 onClick={() => toggleSection("notifications")}
-                className="rounded-md border border-transparent px-3 py-2 text-xs font-semibold uppercase tracking-wide text-amber-300 md:hidden"
+                className="rounded-md border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-amber-200 hover:bg-amber-500/20"
               >
                 {sectionVisibility.notifications ? "Ocultar" : "Mostrar"}
               </button>
             </div>
           </div>
-          <div className={isMobile && !sectionVisibility.notifications ? "hidden" : "block"}>
+
+          <div className={sectionVisibility.notifications ? "space-y-3" : "hidden"}>
+            <form
+              onSubmit={handleNotificationsSearchSubmit}
+              className="flex flex-col gap-2 rounded-xl border border-slate-700 bg-slate-950/30 p-3 sm:flex-row sm:items-center"
+            >
+              <input
+                type="text"
+                value={notificationsSearch}
+                onChange={(event) => setNotificationsSearch(event.target.value)}
+                placeholder="Buscar por pieza, SKU, marca, coche, ano, ubicacion o estatus"
+                className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-amber-400 focus:outline-none"
+              />
+              <div className="flex items-center gap-2">
+                <button
+                  type="submit"
+                  disabled={notificationsLoading}
+                  className="rounded-md border border-slate-600 px-3 py-2 text-sm text-slate-100 hover:border-amber-400 disabled:opacity-60"
+                >
+                  Buscar
+                </button>
+                <button
+                  type="button"
+                  onClick={clearNotificationsSearch}
+                  disabled={notificationsLoading || !notificationsSearch.trim().length}
+                  className="rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:border-slate-500 disabled:opacity-50"
+                >
+                  Limpiar
+                </button>
+              </div>
+            </form>
+
             {notifications.length ? (
-              <ul className="divide-y divide-slate-700 text-sm text-slate-100">
-                {notifications.slice(0, 6).map((entry) => (
-                  <li key={entry.id} className="space-y-3 py-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex min-w-0 items-start gap-3">
-                        <div className="h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-slate-700 bg-slate-950/70">
-                          {entry.photoPreview ? (
-                            <button
-                              type="button"
-                              className="h-full w-full cursor-zoom-in"
-                              onClick={() =>
-                                setNotificationViewer({
-                                  src: entry.photoPreview!,
-                                  title: entry.piece ? `Foto ${entry.piece}` : "Foto de pieza",
-                                  subtitle: entry.skuInternal ? `SKU: ${entry.skuInternal}` : null
-                                })
-                              }
-                            >
-                              <img
-                                src={entry.photoPreview}
-                                alt={entry.piece ? `Miniatura ${entry.piece}` : "Miniatura de pieza"}
-                                className="h-full w-full object-cover"
-                                loading="lazy"
-                                decoding="async"
-                              />
-                            </button>
-                          ) : (
-                            <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-500">
-                              Sin foto
-                            </div>
+              <>
+                <ul className="divide-y divide-slate-700 text-sm text-slate-100">
+                  {notifications.map((entry) => (
+                    <li key={entry.id} className="space-y-3 py-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex min-w-0 items-start gap-3">
+                          <div className="h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-slate-700 bg-slate-950/70">
+                            {entry.photoPreview ? (
+                              <button
+                                type="button"
+                                className="h-full w-full cursor-zoom-in"
+                                onClick={() =>
+                                  setNotificationViewer({
+                                    src: entry.photoPreview!,
+                                    title: entry.piece ? `Foto ${entry.piece}` : "Foto de pieza",
+                                    subtitle: entry.skuInternal ? `SKU: ${entry.skuInternal}` : null
+                                  })
+                                }
+                              >
+                                <img
+                                  src={entry.photoPreview}
+                                  alt={entry.piece ? `Miniatura ${entry.piece}` : "Miniatura de pieza"}
+                                  className="h-full w-full object-cover"
+                                  loading="lazy"
+                                  decoding="async"
+                                />
+                              </button>
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-500">
+                                Sin foto
+                              </div>
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-base leading-tight text-slate-100">{entry.message}</p>
+                            <p className="mt-1 text-xs text-slate-400">{formatRelativeTime(entry.createdAt)}</p>
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 flex-col items-end gap-1 text-[11px] text-slate-400">
+                          {entry.itemId && <span className="font-mono tracking-wide">{entry.itemId}</span>}
+                          {entry.status && (
+                            <span className={`rounded-full border px-2 py-0.5 ${getStatusBadgeClass(entry.status)}`}>
+                              {entry.status}
+                            </span>
                           )}
                         </div>
-                        <div className="min-w-0">
-                          <p className="text-base leading-tight text-slate-100">{entry.message}</p>
-                          <p className="mt-1 text-xs text-slate-400">{formatRelativeTime(entry.createdAt)}</p>
+                      </div>
+                      <div className="overflow-x-auto pb-1">
+                        <div className="flex min-w-max items-center gap-4 text-sm text-slate-200">
+                          <p className="whitespace-nowrap">Pieza: {entry.piece || "-"}</p>
+                          <p className="whitespace-nowrap">SKU: {entry.skuInternal || "-"}</p>
+                          <p className="whitespace-nowrap">Marca: {entry.marca || "-"}</p>
+                          <p className="whitespace-nowrap">Coche: {entry.coche || "-"}</p>
+                          <p className="whitespace-nowrap">Ano: {entry.ano || "-"}</p>
+                          <p className="whitespace-nowrap">Ubicacion: {entry.ubicacion || "-"}</p>
                         </div>
                       </div>
-                      <div className="flex shrink-0 flex-col items-end gap-1 text-[11px] text-slate-400">
-                        {entry.itemId && <span className="font-mono tracking-wide">{entry.itemId}</span>}
-                        {entry.status && (
-                          <span className={`rounded-full border px-2 py-0.5 ${getStatusBadgeClass(entry.status)}`}>
-                            {entry.status}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="overflow-x-auto pb-1">
-                      <div className="flex min-w-max items-center gap-4 text-sm text-slate-200">
-                        <p className="whitespace-nowrap">Pieza: {entry.piece || "-"}</p>
-                        <p className="whitespace-nowrap">SKU: {entry.skuInternal || "-"}</p>
-                        <p className="whitespace-nowrap">Marca: {entry.marca || "-"}</p>
-                        <p className="whitespace-nowrap">Coche: {entry.coche || "-"}</p>
-                        <p className="whitespace-nowrap">Ano: {entry.ano || "-"}</p>
-                        <p className="whitespace-nowrap">Ubicacion: {entry.ubicacion || "-"}</p>
-                      </div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
+                    </li>
+                  ))}
+                </ul>
+
+                <div className="flex flex-col gap-2 rounded-xl border border-slate-700 bg-slate-950/30 p-3 text-xs text-slate-300 sm:flex-row sm:items-center sm:justify-between">
+                  <p>
+                    Mostrando {notificationsRangeStart}-{notificationsRangeEnd} de {notificationsTotal} notificaciones
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => goToNotificationPage(notificationsPage - 1)}
+                      disabled={notificationsLoading || notificationsPage <= 1}
+                      className="rounded-md border border-slate-600 px-3 py-1.5 text-xs text-slate-100 hover:border-amber-400 disabled:opacity-50"
+                    >
+                      Anterior
+                    </button>
+                    <span className="min-w-[110px] text-center text-[11px] text-slate-400">
+                      Pagina {notificationsPage} de {notificationsTotalPages}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => goToNotificationPage(notificationsPage + 1)}
+                      disabled={notificationsLoading || notificationsPage >= notificationsTotalPages}
+                      className="rounded-md border border-slate-600 px-3 py-1.5 text-xs text-slate-100 hover:border-amber-400 disabled:opacity-50"
+                    >
+                      Siguiente
+                    </button>
+                  </div>
+                </div>
+              </>
             ) : (
-              <p className="text-sm text-slate-400">Sin eventos recientes.</p>
+              <p className="text-sm text-slate-400">
+                {notificationsSearch.trim().length
+                  ? "No hay notificaciones que coincidan con la busqueda."
+                  : "Sin eventos registrados."}
+              </p>
             )}
           </div>
         </section>

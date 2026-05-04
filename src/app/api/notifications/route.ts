@@ -14,6 +14,8 @@ const YEAR_FROM_KEYS = ["ano_desde", "anoDesde", "anio_desde", "anioDesde"];
 const YEAR_TO_KEYS = ["ano_hasta", "anoHasta", "anio_hasta", "anioHasta"];
 const YEAR_KEYS = ["ano", "anio", "year"];
 const LOCATION_KEYS = ["ubicacion", "location", "locacion"];
+const DEFAULT_PAGE_SIZE = 30;
+const MAX_PAGE_SIZE = 100;
 
 const extractMlItemId = (value: unknown) => {
   if (typeof value !== "string") return null;
@@ -80,6 +82,23 @@ function buildMessage(params: {
   return `${pieceLabel} ${verb}`;
 }
 
+const parsePagination = (searchParams: URLSearchParams) => {
+  const legacyLimit = Number.parseInt(searchParams.get("limit") ?? "", 10);
+  const pageParam = Number.parseInt(searchParams.get("page") ?? "1", 10);
+  const pageSizeParamRaw = searchParams.get("pageSize");
+  const pageSizeParam = pageSizeParamRaw ? Number.parseInt(pageSizeParamRaw, 10) : NaN;
+
+  const page = Number.isFinite(pageParam) && pageParam > 0 ? pageParam : 1;
+  const inferredPageSize = Number.isFinite(pageSizeParam) && pageSizeParam > 0
+    ? pageSizeParam
+    : Number.isFinite(legacyLimit) && legacyLimit > 0
+      ? legacyLimit
+      : DEFAULT_PAGE_SIZE;
+  const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, inferredPageSize));
+
+  return { page, pageSize };
+};
+
 export async function GET(req: Request) {
   const session = await auth();
   if (!session?.user?.id) {
@@ -87,16 +106,16 @@ export async function GET(req: Request) {
   }
 
   const { searchParams } = new URL(req.url);
-  const limitParam = Number(searchParams.get("limit"));
-  const limit = Number.isFinite(limitParam) ? Math.min(Math.max(Math.floor(limitParam), 1), 50) : 12;
+  const { page, pageSize } = parsePagination(searchParams);
+  const searchTermRaw = (searchParams.get("search") ?? "").trim();
+  const searchTerm = searchTermRaw.toLowerCase();
 
   const logs = await prisma.auditLog.findMany({
     where: {
       userId: session.user.id,
       action: { in: SUPPORTED_ACTIONS }
     },
-    orderBy: { createdAt: "desc" },
-    take: limit
+    orderBy: { createdAt: "desc" }
   });
 
   const mlItemIds = new Set<string>();
@@ -192,5 +211,37 @@ export async function GET(req: Request) {
     };
   });
 
-  return NextResponse.json({ notifications });
+  const filteredNotifications = searchTerm
+    ? notifications.filter((entry) => {
+        const haystack = [
+          entry.message,
+          entry.itemId ?? "",
+          entry.status ?? "",
+          entry.piece ?? "",
+          entry.skuInternal ?? "",
+          entry.marca ?? "",
+          entry.coche ?? "",
+          entry.ano ?? "",
+          entry.ubicacion ?? ""
+        ]
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(searchTerm);
+      })
+    : notifications;
+
+  const total = filteredNotifications.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const start = (safePage - 1) * pageSize;
+  const pagedNotifications = filteredNotifications.slice(start, start + pageSize);
+
+  return NextResponse.json({
+    notifications: pagedNotifications,
+    page: safePage,
+    pageSize,
+    total,
+    totalPages,
+    search: searchTermRaw || null
+  });
 }
