@@ -384,6 +384,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const pageSizeRef = useRef(initialPage.pageSize);
   const [totalItems, setTotalItems] = useState(initialPage.total);
   const [loadingAll, setLoadingAll] = useState(false);
+  const [bootstrappingAllInventory, setBootstrappingAllInventory] = useState(
+    !isManualOnly && initialPage.items.length < initialPage.total
+  );
   const [sectionVisibility, setSectionVisibility] = useState<Record<SectionKey, boolean>>({
     notifications: true,
     manual: true,
@@ -585,9 +588,11 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         const currentMap = new Map(current.map((item) => [item.id, item]));
         return collected.map((item) => (updatingSet.has(item.id) ? currentMap.get(item.id) ?? item : item));
       });
+      setBootstrappingAllInventory(false);
       setSelectedIds([]);
       setFocusedRowInfo(null);
     } catch (err: any) {
+      setBootstrappingAllInventory(false);
       setMessage(err?.message || "No se pudo cargar el inventario completo");
     } finally {
       setLoadingAll(false);
@@ -606,6 +611,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     autoLoadAttemptedRef.current = true;
     void loadAllItems();
   }, [isManualOnly, items.length, totalItems, loadAllItems]);
+
+  const shouldHidePartialInventory = !isManualOnly && bootstrappingAllInventory;
 
   const deleteItems = useCallback(async (ids: string[], password?: string) => {
     if (!ids.length) return;
@@ -2600,7 +2607,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
             </div>
           )}
           <p className="text-xs text-slate-400">
-            {loadingAll
+            {shouldHidePartialInventory || loadingAll
               ? `Cargando inventario completo (${items.length}/${totalItems})...`
               : `Mostrando ${items.length} registros`}
           </p>
@@ -2608,7 +2615,11 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
             className="mt-4 overflow-auto rounded-2xl border border-slate-800 bg-slate-950/30 shadow-inner shadow-black/40"
             style={{ maxHeight: tableHeaderHeight + tableVisibleRows * tableRowHeight }}
           >
-            {filteredItems.length === 0 ? (
+            {shouldHidePartialInventory ? (
+              <div className="p-8 text-center text-sm text-slate-300">
+                Cargando inventario completo. Espera un momento...
+              </div>
+            ) : filteredItems.length === 0 ? (
               <div className="p-8 text-center text-sm text-slate-400">
                 No hay registros que coincidan con el filtro aplicado.
               </div>
