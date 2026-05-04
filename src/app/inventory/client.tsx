@@ -2060,6 +2060,14 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 >
                   Volver al menú
                 </Link>
+                {!isManualOnly && canCreateManual && (
+                  <Link
+                    href="/inventory/manual"
+                    className="rounded-md border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-center text-sm font-semibold text-amber-200 hover:bg-amber-500/20"
+                  >
+                    Captura manual
+                  </Link>
+                )}
                 <a
                   href="/api/auth/signout"
                   className="rounded-md border border-slate-700 px-3 py-2 text-center text-sm text-slate-200 hover:border-amber-400"
@@ -2122,6 +2130,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         </section>
         )}
 
+        {isManualOnly && (
         <section className="bg-slate-800/80 border border-slate-700 rounded-2xl p-4 shadow space-y-4">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div className="space-y-1">
@@ -2419,6 +2428,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
             )}
           </div>
         </section>
+        )}
 
   {!isManualOnly && (
   <>
