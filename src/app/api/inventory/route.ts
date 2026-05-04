@@ -348,10 +348,13 @@ export async function PATCH(req: Request) {
 
   const baseExtra = typeof existing.extraData === "object" && existing.extraData !== null ? existing.extraData : {};
   const nextExtra: Record<string, any> = { ...(baseExtra as Record<string, any>) };
-  if (estatusInterno && estatusInterno.trim()) {
-    nextExtra.estatus_interno = estatusInterno.trim();
-  } else {
-    delete nextExtra.estatus_interno;
+  if (estatusInterno !== undefined) {
+    const normalizedInternalStatus = estatusInterno?.trim() ?? "";
+    if (normalizedInternalStatus) {
+      nextExtra.estatus_interno = normalizedInternalStatus;
+    } else {
+      delete nextExtra.estatus_interno;
+    }
   }
 
   if (fechaPrestamoPago && fechaPrestamoPago.trim()) {
