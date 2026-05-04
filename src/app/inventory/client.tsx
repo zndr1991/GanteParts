@@ -2381,41 +2381,45 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
             {notifications.length ? (
               <ul className="divide-y divide-slate-700 text-sm text-slate-100">
                 {notifications.slice(0, 6).map((entry) => (
-                  <li key={entry.id} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="h-14 w-14 overflow-hidden rounded-xl border border-slate-700 bg-slate-950/70">
-                        {entry.photoPreview ? (
-                          <img
-                            src={entry.photoPreview}
-                            alt={entry.piece ? `Miniatura ${entry.piece}` : "Miniatura de pieza"}
-                            className="h-full w-full object-cover"
-                            loading="lazy"
-                            decoding="async"
-                          />
-                        ) : (
-                          <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-500">
-                            Sin foto
-                          </div>
+                  <li key={entry.id} className="space-y-3 py-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex min-w-0 items-start gap-3">
+                        <div className="h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-slate-700 bg-slate-950/70">
+                          {entry.photoPreview ? (
+                            <img
+                              src={entry.photoPreview}
+                              alt={entry.piece ? `Miniatura ${entry.piece}` : "Miniatura de pieza"}
+                              className="h-full w-full object-cover"
+                              loading="lazy"
+                              decoding="async"
+                            />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-500">
+                              Sin foto
+                            </div>
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-base leading-tight text-slate-100">{entry.message}</p>
+                          <p className="mt-1 text-xs text-slate-400">{formatRelativeTime(entry.createdAt)}</p>
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 flex-col items-end gap-1 text-[11px] text-slate-400">
+                        {entry.itemId && <span className="font-mono tracking-wide">{entry.itemId}</span>}
+                        {entry.status && (
+                          <span className={`rounded-full border px-2 py-0.5 ${getStatusBadgeClass(entry.status)}`}>
+                            {entry.status}
+                          </span>
                         )}
                       </div>
-                      <div>
-                        <p className="text-sm">{entry.message}</p>
-                        <p className="text-xs text-slate-300">Pieza: {entry.piece || "-"}</p>
-                        <p className="text-xs text-slate-300">SKU: {entry.skuInternal || "-"}</p>
-                        <p className="text-xs text-slate-300">Marca: {entry.marca || "-"}</p>
-                        <p className="text-xs text-slate-300">Coche: {entry.coche || "-"}</p>
-                        <p className="text-xs text-slate-300">Ano: {entry.ano || "-"}</p>
-                        <p className="text-xs text-slate-300">Ubicacion: {entry.ubicacion || "-"}</p>
-                        <p className="text-[11px] text-slate-500">{formatRelativeTime(entry.createdAt)}</p>
-                      </div>
                     </div>
-                    <div className="flex flex-col items-start gap-1 text-[11px] text-slate-400 sm:items-end">
-                      {entry.itemId && <span className="font-mono tracking-wide">{entry.itemId}</span>}
-                      {entry.status && (
-                        <span className={`rounded-full border px-2 py-0.5 ${getStatusBadgeClass(entry.status)}`}>
-                          {entry.status}
-                        </span>
-                      )}
+                    <div className="grid grid-cols-1 gap-x-4 gap-y-1 text-sm text-slate-200 sm:grid-cols-3">
+                      <p>Pieza: {entry.piece || "-"}</p>
+                      <p>SKU: {entry.skuInternal || "-"}</p>
+                      <p>Marca: {entry.marca || "-"}</p>
+                      <p>Coche: {entry.coche || "-"}</p>
+                      <p>Ano: {entry.ano || "-"}</p>
+                      <p>Ubicacion: {entry.ubicacion || "-"}</p>
                     </div>
                   </li>
                 ))}
