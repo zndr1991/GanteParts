@@ -142,7 +142,7 @@ const drawingColors = ["#f87171", "#facc15", "#4ade80", "#38bdf8", "#f472b6", "#
 const THUMBNAILS_ENABLED = true;
 const THUMBNAIL_PREFETCH_LIMIT = 40; // evita descargas masivas por pagina
 const THUMBNAIL_FETCH_GAP_MS = 120;
-const NOTIFICATIONS_PAGE_SIZE = 30;
+const NOTIFICATIONS_PAGE_SIZE = 10;
 const NOTIFICATIONS_POLL_INTERVAL_MS = 20_000;
 
 const makePhotoKey = (file: File) => `${file.name}-${file.size}-${file.lastModified}`;
@@ -404,6 +404,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [downloading, setDownloading] = useState(false);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [notificationsLoadingMore, setNotificationsLoadingMore] = useState(false);
+  const [notificationsPage, setNotificationsPage] = useState(1);
+  const [notificationsHasMore, setNotificationsHasMore] = useState(false);
   const [notificationsSearch, setNotificationsSearch] = useState("");
   const [toastNotification, setToastNotification] = useState<NotificationItem | null>(null);
   const [notificationViewer, setNotificationViewer] = useState<NotificationViewerState | null>(null);
@@ -519,15 +522,22 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     }, 6000);
   }, []);
 
-  const fetchNotifications = useCallback(async (options?: { silent?: boolean; search?: string }) => {
+  const fetchNotifications = useCallback(async (options?: { silent?: boolean; search?: string; page?: number; append?: boolean }) => {
     const silent = Boolean(options?.silent);
+    const append = Boolean(options?.append);
+    const targetPage = Math.max(1, options?.page ?? 1);
     const useOverrideSearch = Boolean(options && Object.prototype.hasOwnProperty.call(options, "search"));
     const searchTerm = (useOverrideSearch ? options?.search ?? "" : notificationsSearch).trim();
     if (!silent && isMountedRef.current) {
-      setNotificationsLoading(true);
+      if (append) {
+        setNotificationsLoadingMore(true);
+      } else {
+        setNotificationsLoading(true);
+      }
     }
     try {
       const params = new URLSearchParams({
+        page: String(targetPage),
         pageSize: String(NOTIFICATIONS_PAGE_SIZE)
       });
       if (searchTerm.length) {
@@ -540,10 +550,27 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       }
       const data = await res.json().catch(() => ({}));
       const list: NotificationItem[] = Array.isArray(data.notifications) ? data.notifications : [];
+      const serverPage = Math.max(1, Number(data.page ?? targetPage));
+      const hasMore = Boolean(data.hasMore ?? list.length === NOTIFICATIONS_PAGE_SIZE);
       if (!isMountedRef.current) return;
-      setNotifications(list);
+      if (append) {
+        setNotifications((prev) => {
+          const seen = new Set(prev.map((entry) => entry.id));
+          const merged = [...prev];
+          list.forEach((entry) => {
+            if (!seen.has(entry.id)) {
+              merged.push(entry);
+            }
+          });
+          return merged;
+        });
+      } else {
+        setNotifications(list);
+      }
+      setNotificationsPage(serverPage);
+      setNotificationsHasMore(hasMore);
 
-      if (!searchTerm.length && list.length) {
+      if (!append && !searchTerm.length && list.length) {
         const newest = list[0];
         if (!lastNotificationIdRef.current) {
           lastNotificationIdRef.current = newest.id;
@@ -560,7 +587,11 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       }
     } finally {
       if (!silent && isMountedRef.current) {
-        setNotificationsLoading(false);
+        if (append) {
+          setNotificationsLoadingMore(false);
+        } else {
+          setNotificationsLoading(false);
+        }
       }
     }
   }, [notificationsSearch, triggerNotificationToast]);
@@ -575,8 +606,18 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
   const clearNotificationsSearch = useCallback(() => {
     setNotificationsSearch("");
-    void fetchNotifications({ silent: false, search: "" });
+    void fetchNotifications({ silent: false, search: "", page: 1 });
   }, [fetchNotifications]);
+
+  const loadMoreNotifications = useCallback(() => {
+    if (notificationsLoading || notificationsLoadingMore || !notificationsHasMore) return;
+    void fetchNotifications({
+      silent: false,
+      search: notificationsSearch,
+      page: notificationsPage + 1,
+      append: true
+    });
+  }, [fetchNotifications, notificationsHasMore, notificationsLoading, notificationsLoadingMore, notificationsPage, notificationsSearch]);
 
   useEffect(() => {
     return () => {
@@ -602,13 +643,13 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     if (isManualOnly) {
       return undefined;
     }
-    if (notificationsSearch.trim().length) {
+    if (notificationsSearch.trim().length || notificationsPage > 1) {
       return undefined;
     }
-    fetchNotifications({ silent: true, search: "" });
-    const interval = setInterval(() => fetchNotifications({ silent: true, search: "" }), NOTIFICATIONS_POLL_INTERVAL_MS);
+    fetchNotifications({ silent: true, search: "", page: 1 });
+    const interval = setInterval(() => fetchNotifications({ silent: true, search: "", page: 1 }), NOTIFICATIONS_POLL_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [fetchNotifications, isManualOnly, notificationsSearch]);
+  }, [fetchNotifications, isManualOnly, notificationsPage, notificationsSearch]);
 
   const downloadTemplate = async () => {
     setDownloading(true);
@@ -2703,7 +2744,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="text-lg font-semibold">Notificaciones Mercado Libre</h2>
-              <p className="text-xs text-slate-400">Mostrando las ultimas 30 notificaciones. Usa el buscador para encontrar eventos anteriores.</p>
+              <p className="text-xs text-slate-400">Mostrando las ultimas 10 notificaciones. Puedes cargar 10 mas por bloque o buscar eventos anteriores.</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <button
@@ -2816,6 +2857,19 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                     </li>
                   ))}
                 </ul>
+
+                {notificationsHasMore && (
+                  <div className="flex justify-center pt-1">
+                    <button
+                      type="button"
+                      onClick={loadMoreNotifications}
+                      disabled={notificationsLoading || notificationsLoadingMore}
+                      className="rounded-md border border-amber-400/50 bg-amber-500/10 px-4 py-2 text-sm font-semibold text-amber-100 hover:bg-amber-500/20 disabled:opacity-50"
+                    >
+                      {notificationsLoadingMore ? "Cargando..." : "Cargar 10 mas"}
+                    </button>
+                  </div>
+                )}
               </>
             ) : (
               <p className="text-sm text-slate-400">

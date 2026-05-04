@@ -14,7 +14,7 @@ const YEAR_FROM_KEYS = ["ano_desde", "anoDesde", "anio_desde", "anioDesde"];
 const YEAR_TO_KEYS = ["ano_hasta", "anoHasta", "anio_hasta", "anioHasta"];
 const YEAR_KEYS = ["ano", "anio", "year"];
 const LOCATION_KEYS = ["ubicacion", "location", "locacion"];
-const DEFAULT_PAGE_SIZE = 30;
+const DEFAULT_PAGE_SIZE = 10;
 
 const extractMlItemId = (value: unknown) => {
   if (typeof value !== "string") return null;
@@ -81,17 +81,21 @@ function buildMessage(params: {
   return `${pieceLabel} ${verb}`;
 }
 
-const parsePageSize = (searchParams: URLSearchParams) => {
+const parsePagination = (searchParams: URLSearchParams) => {
   const legacyLimit = Number.parseInt(searchParams.get("limit") ?? "", 10);
+  const pageParam = Number.parseInt(searchParams.get("page") ?? "1", 10);
   const pageSizeParamRaw = searchParams.get("pageSize");
   const pageSizeParam = pageSizeParamRaw ? Number.parseInt(pageSizeParamRaw, 10) : NaN;
 
+  const page = Number.isFinite(pageParam) && pageParam > 0 ? pageParam : 1;
   const inferredPageSize = Number.isFinite(pageSizeParam) && pageSizeParam > 0
     ? pageSizeParam
     : Number.isFinite(legacyLimit) && legacyLimit > 0
       ? legacyLimit
       : DEFAULT_PAGE_SIZE;
-  return Math.min(100, Math.max(1, inferredPageSize));
+  const pageSize = Math.min(100, Math.max(1, inferredPageSize));
+
+  return { page, pageSize };
 };
 
 export async function GET(req: Request) {
@@ -101,9 +105,13 @@ export async function GET(req: Request) {
   }
 
   const { searchParams } = new URL(req.url);
-  const pageSize = parsePageSize(searchParams);
+  const { page, pageSize } = parsePagination(searchParams);
   const searchTermRaw = (searchParams.get("search") ?? "").trim();
   const searchTerm = searchTermRaw.toLowerCase();
+  const hasSearch = searchTerm.length > 0;
+  const skip = (page - 1) * pageSize;
+  const queryTake = hasSearch ? undefined : pageSize + 1;
+  const querySkip = hasSearch ? undefined : skip;
 
   const logs = await prisma.auditLog.findMany({
     where: {
@@ -111,14 +119,18 @@ export async function GET(req: Request) {
       action: { in: SUPPORTED_ACTIONS }
     },
     orderBy: { createdAt: "desc" },
-    ...(searchTerm ? {} : { take: pageSize })
+    ...(queryTake !== undefined ? { take: queryTake } : {}),
+    ...(querySkip !== undefined ? { skip: querySkip } : {})
   });
+
+  const hasMoreFromDb = !hasSearch && logs.length > pageSize;
+  const logsForPage = hasMoreFromDb ? logs.slice(0, pageSize) : logs;
 
   const mlItemIds = new Set<string>();
   const inventoryItemIds = new Set<string>();
   const normalizedMlByLogId = new Map<string, string | null>();
 
-  logs.forEach((log) => {
+  logsForPage.forEach((log) => {
     if (typeof log.itemId === "string" && log.itemId.trim().length) {
       inventoryItemIds.add(log.itemId);
     }
@@ -163,7 +175,7 @@ export async function GET(req: Request) {
       .map((item) => [item.mlItemId!.toUpperCase(), item])
   );
 
-  const notifications = logs.map((log) => {
+  const notifications = logsForPage.map((log) => {
     const metadata = (log.metadata ?? {}) as Record<string, any>;
     const itemId = typeof metadata.itemId === "string" ? metadata.itemId : null;
     const payloadResource = typeof metadata.payload?.resource === "string" ? metadata.payload.resource : null;
@@ -207,7 +219,7 @@ export async function GET(req: Request) {
     };
   });
 
-  const filteredNotifications = searchTerm
+  const filteredNotifications = hasSearch
     ? notifications.filter((entry) => {
         const haystack = [
           entry.message,
@@ -226,16 +238,27 @@ export async function GET(req: Request) {
       })
     : notifications;
 
-  const limitedNotifications = filteredNotifications.slice(0, pageSize);
-  const total = searchTerm ? filteredNotifications.length : limitedNotifications.length;
-  const totalPages = searchTerm ? Math.max(1, Math.ceil(total / pageSize)) : 1;
+  const start = hasSearch ? skip : 0;
+  const pagedNotifications = hasSearch
+    ? filteredNotifications.slice(start, start + pageSize)
+    : filteredNotifications;
+  const total = hasSearch ? filteredNotifications.length : skip + pagedNotifications.length + (hasMoreFromDb ? 1 : 0);
+  const totalPages = hasSearch
+    ? Math.max(1, Math.ceil(total / pageSize))
+    : hasMoreFromDb
+      ? page + 1
+      : page;
+  const hasMore = hasSearch
+    ? start + pagedNotifications.length < filteredNotifications.length
+    : hasMoreFromDb;
 
   return NextResponse.json({
-    notifications: limitedNotifications,
-    page: 1,
+    notifications: pagedNotifications,
+    page,
     pageSize,
     total,
     totalPages,
-    search: searchTermRaw || null
+    search: searchTermRaw || null,
+    hasMore
   });
 }
