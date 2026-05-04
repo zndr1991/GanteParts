@@ -2514,7 +2514,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
   {!isManualOnly && (
   <>
-  <section className="bg-slate-800/80 border border-slate-700 rounded-2xl p-4 shadow space-y-3">
+  <section className="hidden bg-slate-800/80 border border-slate-700 rounded-2xl p-4 shadow space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-lg font-semibold">Importar Excel</h2>
             <div className="flex flex-wrap items-center gap-2">
@@ -2603,7 +2603,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
               </span>
             </div>
           </div>
-          <div className="rounded-2xl border border-slate-700 bg-slate-900/50 p-4">
+          <div className="hidden rounded-2xl border border-slate-700 bg-slate-900/50 p-4">
             <div className="flex items-center justify-between gap-3">
               <p className="text-[11px] uppercase tracking-[0.4em] text-slate-400">Seleccion actual</p>
               {focusedRowInfo && (
@@ -2650,7 +2650,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
               </p>
             )}
           </div>
-          {canManageMercadoLibre ? (
+          {false && (canManageMercadoLibre ? (
             <div className="flex flex-col gap-3 rounded-2xl border border-slate-700 bg-slate-900/60 p-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="space-y-1">
                 <p className="text-xs text-slate-400">Acciones Mercado Libre</p>
@@ -2684,7 +2684,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
             <div className="rounded-2xl border border-slate-700 bg-slate-900/60 p-3 text-xs text-slate-400">
               Tu rol no puede pausar o activar publicaciones en Mercado Libre.
             </div>
-          )}
+          ))}
           {statusCounters.length > 0 && (
             <div className="flex flex-wrap gap-2 rounded-2xl border border-slate-700 bg-slate-900/60 p-3 text-[11px] uppercase tracking-wide text-slate-200">
               {statusCounters.map(([label, count]) => {
