@@ -361,6 +361,26 @@ const formatRelativeTime = (value: string) => {
   return `Hace ${days} d`;
 };
 
+const buildNotificationActionKey = (entry: NotificationItem) => {
+  const itemId = (entry.itemId ?? "").toString().trim().toUpperCase();
+  const status = (entry.status ?? "").toString().trim().toLowerCase();
+  const success = entry.success ? "1" : "0";
+  const message = (entry.message ?? "").toString().trim().toLowerCase();
+  return [itemId, status, success, message].join("||");
+};
+
+const dedupeNotificationsByAction = (entries: NotificationItem[]) => {
+  const seen = new Set<string>();
+  const result: NotificationItem[] = [];
+  entries.forEach((entry) => {
+    const key = buildNotificationActionKey(entry);
+    if (seen.has(key)) return;
+    seen.add(key);
+    result.push(entry);
+  });
+  return result;
+};
+
 const getStatusBadgeClass = (status?: string | null) => {
   switch ((status ?? "").toLowerCase()) {
     case "active":
@@ -550,28 +570,22 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       }
       const data = await res.json().catch(() => ({}));
       const list: NotificationItem[] = Array.isArray(data.notifications) ? data.notifications : [];
+      const uniqueList = dedupeNotificationsByAction(list);
       const serverPage = Math.max(1, Number(data.page ?? targetPage));
       const hasMore = Boolean(data.hasMore ?? list.length === NOTIFICATIONS_PAGE_SIZE);
       if (!isMountedRef.current) return;
       if (append) {
         setNotifications((prev) => {
-          const seen = new Set(prev.map((entry) => entry.id));
-          const merged = [...prev];
-          list.forEach((entry) => {
-            if (!seen.has(entry.id)) {
-              merged.push(entry);
-            }
-          });
-          return merged;
+          return dedupeNotificationsByAction([...prev, ...uniqueList]);
         });
       } else {
-        setNotifications(list);
+        setNotifications(uniqueList);
       }
       setNotificationsPage(serverPage);
       setNotificationsHasMore(hasMore);
 
-      if (!append && !searchTerm.length && list.length) {
-        const newest = list[0];
+      if (!append && !searchTerm.length && uniqueList.length) {
+        const newest = uniqueList[0];
         if (!lastNotificationIdRef.current) {
           lastNotificationIdRef.current = newest.id;
           return;
