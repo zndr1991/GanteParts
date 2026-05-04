@@ -494,7 +494,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   );
   const [loadingPage, setLoadingPage] = useState(false);
   const [sectionVisibility, setSectionVisibility] = useState<Record<SectionKey, boolean>>({
-    notifications: true,
+    notifications: false,
     manual: true,
     import: true
   });
@@ -526,7 +526,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     if (isMobile) {
       setSectionVisibility({ notifications: false, manual: true, import: false });
     } else {
-      setSectionVisibility({ notifications: true, manual: true, import: true });
+      setSectionVisibility({ notifications: false, manual: true, import: true });
     }
   }, [isManualOnly, isMobile]);
 
