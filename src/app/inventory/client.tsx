@@ -40,6 +40,12 @@ type NotificationItem = {
   photoPreview?: string | null;
 };
 
+type NotificationViewerState = {
+  src: string;
+  title: string;
+  subtitle?: string | null;
+};
+
 type SectionKey = "notifications" | "manual" | "import";
 
 type InventoryPageResponse = {
@@ -378,6 +384,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
   const [toastNotification, setToastNotification] = useState<NotificationItem | null>(null);
+  const [notificationViewer, setNotificationViewer] = useState<NotificationViewerState | null>(null);
   const [updatingIds, setUpdatingIds] = useState<string[]>([]);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
@@ -527,6 +534,17 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (!notificationViewer) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setNotificationViewer(null);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [notificationViewer]);
 
   useEffect(() => {
     if (isManualOnly) {
@@ -2321,6 +2339,40 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           </div>
         </div>
       )}
+      {!isManualOnly && notificationViewer && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80 p-4"
+          onClick={() => setNotificationViewer(null)}
+        >
+          <div
+            className="w-full max-w-5xl rounded-2xl border border-slate-700 bg-slate-900/95 p-4 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-slate-100">{notificationViewer.title}</p>
+                {notificationViewer.subtitle && (
+                  <p className="text-xs text-slate-400">{notificationViewer.subtitle}</p>
+                )}
+              </div>
+              <button
+                type="button"
+                className="rounded-md border border-slate-600 px-3 py-1 text-xs text-slate-200 hover:border-amber-400"
+                onClick={() => setNotificationViewer(null)}
+              >
+                Cerrar
+              </button>
+            </div>
+            <div className="flex max-h-[80vh] items-center justify-center overflow-hidden rounded-xl bg-black/40 p-2">
+              <img
+                src={notificationViewer.src}
+                alt={notificationViewer.title}
+                className="max-h-[75vh] w-auto max-w-full object-contain"
+              />
+            </div>
+          </div>
+        </div>
+      )}
       <main className="min-h-screen bg-slate-950 px-4 py-6 text-slate-100 sm:px-6 sm:py-8">
         <div className="mx-auto flex max-w-screen-2xl flex-col gap-6">
           <header className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 shadow-sm sm:p-6">
@@ -2386,13 +2438,25 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                       <div className="flex min-w-0 items-start gap-3">
                         <div className="h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-slate-700 bg-slate-950/70">
                           {entry.photoPreview ? (
-                            <img
-                              src={entry.photoPreview}
-                              alt={entry.piece ? `Miniatura ${entry.piece}` : "Miniatura de pieza"}
-                              className="h-full w-full object-cover"
-                              loading="lazy"
-                              decoding="async"
-                            />
+                            <button
+                              type="button"
+                              className="h-full w-full cursor-zoom-in"
+                              onClick={() =>
+                                setNotificationViewer({
+                                  src: entry.photoPreview!,
+                                  title: entry.piece ? `Foto ${entry.piece}` : "Foto de pieza",
+                                  subtitle: entry.skuInternal ? `SKU: ${entry.skuInternal}` : null
+                                })
+                              }
+                            >
+                              <img
+                                src={entry.photoPreview}
+                                alt={entry.piece ? `Miniatura ${entry.piece}` : "Miniatura de pieza"}
+                                className="h-full w-full object-cover"
+                                loading="lazy"
+                                decoding="async"
+                              />
+                            </button>
                           ) : (
                             <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-500">
                               Sin foto
@@ -2413,13 +2477,15 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                         )}
                       </div>
                     </div>
-                    <div className="grid grid-cols-1 gap-x-4 gap-y-1 text-sm text-slate-200 sm:grid-cols-3">
-                      <p>Pieza: {entry.piece || "-"}</p>
-                      <p>SKU: {entry.skuInternal || "-"}</p>
-                      <p>Marca: {entry.marca || "-"}</p>
-                      <p>Coche: {entry.coche || "-"}</p>
-                      <p>Ano: {entry.ano || "-"}</p>
-                      <p>Ubicacion: {entry.ubicacion || "-"}</p>
+                    <div className="overflow-x-auto pb-1">
+                      <div className="flex min-w-max items-center gap-4 text-sm text-slate-200">
+                        <p className="whitespace-nowrap">Pieza: {entry.piece || "-"}</p>
+                        <p className="whitespace-nowrap">SKU: {entry.skuInternal || "-"}</p>
+                        <p className="whitespace-nowrap">Marca: {entry.marca || "-"}</p>
+                        <p className="whitespace-nowrap">Coche: {entry.coche || "-"}</p>
+                        <p className="whitespace-nowrap">Ano: {entry.ano || "-"}</p>
+                        <p className="whitespace-nowrap">Ubicacion: {entry.ubicacion || "-"}</p>
+                      </div>
                     </div>
                   </li>
                 ))}
