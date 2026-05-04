@@ -5,7 +5,7 @@ import { InventoryClient } from "./client";
 import type { InventoryClientItem, InventoryInitialPage } from "./client";
 import { getInventorySnapshot } from "@/lib/inventory-cache";
 
-const DEFAULT_INITIAL_PAGE_SIZE = 100;
+const DEFAULT_INITIAL_PAGE_SIZE = 50;
 const INVENTORY_FULL_PAGE_SIZE_ENV = Number(
   process.env.INVENTORY_INITIAL_LOAD_LIMIT ??
     process.env.INVENTORY_FULL_LOAD_LIMIT ??
@@ -13,7 +13,7 @@ const INVENTORY_FULL_PAGE_SIZE_ENV = Number(
 );
 const INVENTORY_FULL_PAGE_SIZE =
   Number.isFinite(INVENTORY_FULL_PAGE_SIZE_ENV) && INVENTORY_FULL_PAGE_SIZE_ENV > 0
-    ? INVENTORY_FULL_PAGE_SIZE_ENV
+    ? Math.min(INVENTORY_FULL_PAGE_SIZE_ENV, DEFAULT_INITIAL_PAGE_SIZE)
     : DEFAULT_INITIAL_PAGE_SIZE;
 
 export default async function InventoryPage() {

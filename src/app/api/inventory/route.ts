@@ -8,8 +8,8 @@ import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
-const DEFAULT_PAGE_SIZE = 100;
-const MAX_PAGE_SIZE = 100;
+const DEFAULT_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 50;
 
 const canEditInventory = (role?: string | null) => {
   const normalized = (role ?? "").toLowerCase();

@@ -98,7 +98,7 @@ const brandOptions = [
 const deletePasswordSecret = (process.env.NEXT_PUBLIC_DELETE_PASSWORD ?? "").trim();
 
 const MAX_PHOTOS = MAX_ITEM_PHOTOS;
-const INVENTORY_PAGE_SIZE = 100;
+const INVENTORY_PAGE_SIZE = 50;
 const MAX_PHOTO_DIMENSION = 1280; // ancho/alto maximo al comprimir
 const PHOTO_QUALITY = 0.8; // calidad JPEG al recomprimir
 const drawingColors = ["#f87171", "#facc15", "#4ade80", "#38bdf8", "#f472b6", "#ffffff"];
@@ -3192,7 +3192,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
             )}
           </div>
           <div className="mt-4 flex flex-col items-center gap-2 sm:flex-row sm:justify-between">
-            <p className="text-[11px] text-slate-500">100 registros por pagina</p>
+            <p className="text-[11px] text-slate-500">50 registros por pagina</p>
             <div className="flex items-center gap-2">
               <button
                 type="button"
