@@ -477,6 +477,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [mlAction, setMlAction] = useState<null | "pause" | "activate">(null);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastNotificationIdRef = useRef<string | null>(null);
+  const lastInventorySearchRef = useRef(search);
   const isMountedRef = useRef(true);
   const localEstatusInternoRef = useRef(
     new Map<string, { value: string; updatedAt: number; prestadoVendidoA?: string | null }>()
@@ -689,17 +690,24 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   };
 
   const fetchInventoryPage = useCallback(
-    async (page: number, options?: { preserveSelection?: boolean; statusFilter?: string | null }) => {
+    async (page: number, options?: { preserveSelection?: boolean; statusFilter?: string | null; search?: string }) => {
       const targetPage = Math.max(1, page);
       setLoadingPage(true);
       try {
         const hasStatusFilterOverride = Boolean(
           options && Object.prototype.hasOwnProperty.call(options, "statusFilter")
         );
+        const hasSearchOverride = Boolean(
+          options && Object.prototype.hasOwnProperty.call(options, "search")
+        );
         const activeStatusFilter = hasStatusFilterOverride
           ? options?.statusFilter ?? null
           : statusFilter;
+        const activeSearch = hasSearchOverride
+          ? options?.search ?? ""
+          : search;
         const normalizedStatus = activeStatusFilter?.toString().trim().toUpperCase() ?? null;
+        const normalizedSearch = activeSearch.toString().trim();
 
         const params = new URLSearchParams({
           page: targetPage.toString(),
@@ -707,6 +715,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         });
         if (normalizedStatus) {
           params.set("statusFilter", normalizedStatus);
+        }
+        if (normalizedSearch.length) {
+          params.set("search", normalizedSearch);
         }
         const res = await fetch(`/api/inventory?${params.toString()}`, { cache: "no-store" });
         const data = await res.json().catch(() => ({}));
@@ -779,8 +790,20 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         setLoadingPage(false);
       }
     },
-    [updatingIds, statusFilter]
+    [updatingIds, statusFilter, search]
   );
+
+  useEffect(() => {
+    if (isManualOnly) return;
+    if (lastInventorySearchRef.current === search) return;
+    lastInventorySearchRef.current = search;
+
+    const debounceId = setTimeout(() => {
+      void fetchInventoryPage(1, { preserveSelection: false, search });
+    }, 280);
+
+    return () => clearTimeout(debounceId);
+  }, [fetchInventoryPage, isManualOnly, search]);
 
   const refresh = useCallback(async () => {
     if (isManualOnly) return;
@@ -2510,38 +2533,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     }
   }, [canEditInventory, inventoryEditForm]);
 
-  const normalizedSearch = search.trim().toLowerCase();
-  const searchFilteredItems = useMemo(() => {
-    if (!normalizedSearch) return items;
-    return items.filter((item) => {
-      const haystack = [
-        item.skuInternal,
-        item.title ?? "",
-        item.extraData?.descripcion_local ?? "",
-        item.extraData?.descripcion_ml ?? "",
-        item.mlItemId ?? "",
-        item.sellerCustomField ?? "",
-        item.extraData?.estatus_interno ?? "",
-        item.extraData?.origen ?? "",
-        item.extraData?.coche ?? "",
-        item.extraData?.pieza ?? "",
-        item.extraData?.marca ?? "",
-        item.extraData?.ano_desde ?? "",
-        item.extraData?.ano_hasta ?? "",
-        item.extraData?.ubicacion ?? "",
-        item.extraData?.inventario ?? "",
-        item.extraData?.revision ?? "",
-        item.extraData?.facebook ?? "",
-        item.extraData?.prestado_vendido_a ?? "",
-        item.extraData?.fecha_prestamo_pago ?? "",
-        String(item.stock ?? ""),
-        String(item.price ?? "")
-      ]
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(normalizedSearch);
-    });
-  }, [items, normalizedSearch]);
+  const searchFilteredItems = items;
 
   const normalizedStatusFilter = statusFilter?.toUpperCase() ?? null;
   const statusAndSearchFilteredItems = useMemo(() => {
@@ -3475,7 +3467,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                   className="w-full sm:w-64 rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm focus:border-amber-400 focus:outline-none"
                 />
                 <span className="text-xs text-slate-400">
-                  Mostrando {filteredItems.length} de {items.length}
+                  Mostrando {filteredItems.length} de {totalItems}
                 </span>
               </div>
               <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-4">

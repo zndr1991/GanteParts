@@ -79,10 +79,46 @@ const parseStatusFilter = (searchParams: URLSearchParams) => {
   return raw.toUpperCase();
 };
 
+const parseSearchFilter = (searchParams: URLSearchParams) => {
+  const raw = (searchParams.get("search") ?? "").trim();
+  if (!raw.length) return null;
+  return raw;
+};
+
 const buildStatusFilterSql = (statusFilter: string | null) => {
   if (!statusFilter) return Prisma.empty;
   return Prisma.sql`
     AND COALESCE(NULLIF(UPPER(TRIM("extraData"->>'estatus_interno')), ''), 'SIN ESTATUS') = ${statusFilter}
+  `;
+};
+
+const buildSearchFilterSql = (searchFilter: string | null) => {
+  if (!searchFilter) return Prisma.empty;
+  const likeValue = `%${searchFilter}%`;
+  return Prisma.sql`
+    AND (
+      COALESCE("skuInternal", '') ILIKE ${likeValue}
+      OR COALESCE("title", '') ILIKE ${likeValue}
+      OR COALESCE("mlItemId", '') ILIKE ${likeValue}
+      OR COALESCE("sellerCustomField", '') ILIKE ${likeValue}
+      OR COALESCE("extraData"->>'descripcion_local', '') ILIKE ${likeValue}
+      OR COALESCE("extraData"->>'descripcion_ml', '') ILIKE ${likeValue}
+      OR COALESCE("extraData"->>'estatus_interno', '') ILIKE ${likeValue}
+      OR COALESCE("extraData"->>'origen', '') ILIKE ${likeValue}
+      OR COALESCE("extraData"->>'coche', '') ILIKE ${likeValue}
+      OR COALESCE("extraData"->>'pieza', '') ILIKE ${likeValue}
+      OR COALESCE("extraData"->>'marca', '') ILIKE ${likeValue}
+      OR COALESCE("extraData"->>'ano_desde', '') ILIKE ${likeValue}
+      OR COALESCE("extraData"->>'ano_hasta', '') ILIKE ${likeValue}
+      OR COALESCE("extraData"->>'ubicacion', '') ILIKE ${likeValue}
+      OR COALESCE("extraData"->>'inventario', '') ILIKE ${likeValue}
+      OR COALESCE("extraData"->>'revision', '') ILIKE ${likeValue}
+      OR COALESCE("extraData"->>'facebook', '') ILIKE ${likeValue}
+      OR COALESCE("extraData"->>'prestado_vendido_a', '') ILIKE ${likeValue}
+      OR COALESCE("extraData"->>'fecha_prestamo_pago', '') ILIKE ${likeValue}
+      OR CAST(COALESCE("stock", 0) AS TEXT) ILIKE ${likeValue}
+      OR CAST(COALESCE("price", 0) AS TEXT) ILIKE ${likeValue}
+    )
   `;
 };
 
@@ -132,10 +168,12 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const { page, pageSize, skip } = parsePagination(searchParams);
   const statusFilter = parseStatusFilter(searchParams);
+  const searchFilter = parseSearchFilter(searchParams);
 
-  if (statusFilter) {
+  if (statusFilter || searchFilter) {
     const ownerSql = ownerId ? Prisma.sql`AND "ownerId" = ${ownerId}` : Prisma.empty;
     const statusSql = buildStatusFilterSql(statusFilter);
+    const searchSql = buildSearchFilterSql(searchFilter);
 
     const [idRows, countRows, statusTotals] = await Promise.all([
       prisma.$queryRaw<InventoryIdRow[]>(Prisma.sql`
@@ -144,6 +182,7 @@ export async function GET(req: Request) {
         WHERE 1=1
         ${ownerSql}
         ${statusSql}
+        ${searchSql}
         ORDER BY "updatedAt" DESC
         OFFSET ${skip}
         LIMIT ${pageSize}
@@ -154,6 +193,7 @@ export async function GET(req: Request) {
         WHERE 1=1
         ${ownerSql}
         ${statusSql}
+        ${searchSql}
       `),
       getStatusTotals(ownerId)
     ]);
