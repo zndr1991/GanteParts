@@ -21,8 +21,6 @@ model User {
   auditLogs   AuditLog[]
   notificationPreference NotificationPreference?
   mercadoLibreAccounts   MercadoLibreAccount[]
-  financeEntries          FinanceEntry[]
-  debts                   Debt[]
 }
 
 enum FinanceEntryType {
@@ -126,7 +124,6 @@ model MercadoLibreAccount {
 model FinanceEntry {
   id        String          @id @default(cuid())
   ownerId   String
-  owner     User            @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   type      FinanceEntryType
   entryDate DateTime
   concept   String
@@ -142,7 +139,6 @@ model FinanceEntry {
 model Debt {
   id           String         @id @default(cuid())
   ownerId      String
-  owner        User           @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   creditorName String
   concept      String
   createdAt    DateTime       @default(now())

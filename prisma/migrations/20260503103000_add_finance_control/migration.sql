@@ -58,10 +58,4 @@ CREATE INDEX "Debt_ownerId_updatedAt_idx" ON "Debt"("ownerId", "updatedAt");
 CREATE INDEX "DebtMovement_debtId_movementDate_idx" ON "DebtMovement"("debtId", "movementDate");
 
 -- AddForeignKey
-ALTER TABLE "FinanceEntry" ADD CONSTRAINT "FinanceEntry_ownerId_fkey" FOREIGN KEY ("ownerId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "Debt" ADD CONSTRAINT "Debt_ownerId_fkey" FOREIGN KEY ("ownerId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
 ALTER TABLE "DebtMovement" ADD CONSTRAINT "DebtMovement_debtId_fkey" FOREIGN KEY ("debtId") REFERENCES "Debt"("id") ON DELETE CASCADE ON UPDATE CASCADE;
