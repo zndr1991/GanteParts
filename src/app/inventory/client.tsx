@@ -3462,8 +3462,175 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
               ? `Cargando pagina ${currentPage}...`
               : `Pagina ${currentPage} de ${totalPages} · Mostrando ${items.length} de ${totalItems} registros`}
           </p>
+          <div className="mt-4 space-y-3 md:hidden">
+            {filteredItems.length === 0 ? (
+              <div className="rounded-2xl border border-slate-800 bg-slate-950/30 p-6 text-center text-sm text-slate-400">
+                No hay registros que coincidan con el filtro aplicado.
+              </div>
+            ) : (
+              filteredItems.map((item) => {
+                const extra = item.extraData ?? {};
+                const internalStatusRaw = (extra.estatus_interno ?? "").toString().trim();
+                const internalStatus = internalStatusRaw.length ? internalStatusRaw.toUpperCase() : "SIN ESTATUS";
+                const yearLabel = getItemYearLabel(item);
+                const pieceName = getItemPieceName(item);
+                const isSelected = selectedIds.includes(item.id);
+                const cardStatusClass = internalStatus === "VENDIDO"
+                  ? "bg-rose-950/40"
+                  : internalStatus === "PRESTADO"
+                  ? "bg-sky-950/40"
+                  : "";
+                const photosCount = typeof item.photoCount === "number" ? item.photoCount : 0;
+                const previewEnabled = thumbnailsActive && photosCount > 0;
+                const previewSrc = previewEnabled ? thumbnailCache[item.id] : null;
+                const previewLoading = previewEnabled && Boolean(thumbnailLoadingIds[item.id]);
+                const previewError = previewEnabled ? thumbnailErrors[item.id] : null;
+
+                return (
+                  <article
+                    key={item.id}
+                    className={`rounded-2xl border border-slate-700 bg-slate-900/60 p-3 shadow-sm ${cardStatusClass}`}
+                    onClick={() => setFocusedRowInfo(toFocusedInfo(item))}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold leading-tight text-white">{pieceName}</p>
+                        <p className="mt-1 text-[11px] text-slate-400">
+                          SKU: {item.skuInternal || "-"}
+                        </p>
+                      </div>
+                      <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase ${getStatusBadgeClass(item.status)}`}>
+                        {item.status || "sin estatus"}
+                      </span>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                      <div className="rounded-lg border border-slate-700 bg-slate-950/40 p-2">
+                        <p className="text-[10px] uppercase tracking-wide text-slate-400">Precio</p>
+                        <p className="font-semibold text-emerald-300">{formatCurrencyMx(item.price)}</p>
+                      </div>
+                      <div className="rounded-lg border border-slate-700 bg-slate-950/40 p-2">
+                        <p className="text-[10px] uppercase tracking-wide text-slate-400">Stock</p>
+                        <p className="font-semibold text-slate-100">{item.stock}</p>
+                      </div>
+                      <div className="rounded-lg border border-slate-700 bg-slate-950/40 p-2">
+                        <p className="text-[10px] uppercase tracking-wide text-slate-400">Marca / Coche</p>
+                        <p className="font-semibold text-slate-100">
+                          {(extra.marca ?? "-").toString()} / {(extra.coche ?? "-").toString()}
+                        </p>
+                      </div>
+                      <div className="rounded-lg border border-slate-700 bg-slate-950/40 p-2">
+                        <p className="text-[10px] uppercase tracking-wide text-slate-400">Año / Ubicacion</p>
+                        <p className="font-semibold text-slate-100">{yearLabel} / {(extra.ubicacion ?? "-").toString()}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 flex items-center gap-3">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-amber-400 focus:ring-amber-400"
+                        checked={isSelected}
+                        onChange={(event) => {
+                          event.stopPropagation();
+                          toggleItemSelection(item.id);
+                        }}
+                      />
+
+                      {canEditInventory ? (
+                        <select
+                          value={internalStatusRaw}
+                          onChange={(event) => {
+                            event.stopPropagation();
+                            handleEstatusInternoChange(item, event.target.value);
+                          }}
+                          className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
+                        >
+                          <option value="">SIN ESTATUS</option>
+                          {sortedEstatusInternoOptions.map((option) => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-slate-200">
+                          {internalStatus}
+                        </span>
+                      )}
+
+                      <button
+                        type="button"
+                        className={`ml-auto relative flex h-14 w-14 items-center justify-center overflow-hidden rounded-xl border border-slate-800 bg-slate-950/60 text-[10px] text-slate-500 transition ${
+                          canEditInventory ? "hover:border-amber-300" : "opacity-60"
+                        }`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          if (canEditInventory) {
+                            openPhotoModal(item);
+                          }
+                        }}
+                        disabled={!canEditInventory}
+                        aria-label={photosCount ? "Ver fotos" : "Sin fotos"}
+                      >
+                        {previewEnabled ? (
+                          previewSrc ? (
+                            <img
+                              src={previewSrc}
+                              alt={`Miniatura ${pieceName}`}
+                              className="h-full w-full object-cover"
+                              loading="lazy"
+                              decoding="async"
+                            />
+                          ) : previewLoading ? (
+                            <span className="text-amber-200">...</span>
+                          ) : previewError ? (
+                            <span className="text-rose-200">Err</span>
+                          ) : (
+                            <span className="text-slate-400">Foto</span>
+                          )
+                        ) : (
+                          <span className="text-slate-400">Sin</span>
+                        )}
+                      </button>
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+                      <span>ML: {item.mlItemId || "-"}</span>
+                      <span>•</span>
+                      <span>{photosCount ? `${photosCount} fotos` : "Sin fotos"}</span>
+                    </div>
+
+                    {canEditInventory && (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className="rounded-md border border-amber-400/60 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-200 hover:border-amber-300"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openInventoryEditModal(item);
+                          }}
+                        >
+                          Editar
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-md border border-rose-400/40 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-rose-200 hover:border-rose-300"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            requestDeleteAuthorization([item.id]);
+                          }}
+                        >
+                          Borrar
+                        </button>
+                      </div>
+                    )}
+                  </article>
+                );
+              })
+            )}
+          </div>
           <div
-            className="mt-4 overflow-auto rounded-2xl border border-slate-800 bg-slate-950/30 shadow-inner shadow-black/40"
+            className="mt-4 hidden overflow-auto rounded-2xl border border-slate-800 bg-slate-950/30 shadow-inner shadow-black/40 md:block"
             style={{ maxHeight: tableHeaderHeight + tableVisibleRows * tableRowHeight }}
           >
             {filteredItems.length === 0 ? (
