@@ -396,6 +396,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const shapeStartPointRef = useRef<{ x: number; y: number } | null>(null);
   const [photoFiles, setPhotoFiles] = useState<File[]>([]);
   const [editedPhotos, setEditedPhotos] = useState<Record<string, string>>({});
+  const [manualPhotoPreviewUrls, setManualPhotoPreviewUrls] = useState<Record<string, string>>({});
+  const manualPhotoPreviewUrlsRef = useRef<Record<string, string>>({});
   const [photoEditor, setPhotoEditor] = useState<PhotoEditorState | null>(null);
   const [photoEditorBusy, setPhotoEditorBusy] = useState(false);
   const [photoEditorReady, setPhotoEditorReady] = useState(false);
@@ -859,6 +861,60 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     if (cameraInputRef.current) {
       cameraInputRef.current.value = "";
     }
+  }, []);
+
+  const moveManualPhoto = useCallback((fromIndex: number, toIndex: number) => {
+    setPhotoFiles((prev) => {
+      if (fromIndex < 0 || fromIndex >= prev.length || toIndex < 0 || toIndex >= prev.length) {
+        return prev;
+      }
+      if (fromIndex === toIndex) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+  }, []);
+
+  const setManualCoverPhoto = useCallback(
+    (index: number) => {
+      if (index <= 0 || index >= photoFiles.length) return;
+      moveManualPhoto(index, 0);
+    },
+    [photoFiles.length, moveManualPhoto]
+  );
+
+  useEffect(() => {
+    setManualPhotoPreviewUrls((prev) => {
+      const next = { ...prev };
+      const activeKeys = new Set(photoFiles.map((file) => makePhotoKey(file)));
+
+      Object.entries(next).forEach(([key, url]) => {
+        if (!activeKeys.has(key)) {
+          URL.revokeObjectURL(url);
+          delete next[key];
+        }
+      });
+
+      photoFiles.forEach((file) => {
+        const key = makePhotoKey(file);
+        if (!next[key]) {
+          next[key] = URL.createObjectURL(file);
+        }
+      });
+
+      return next;
+    });
+  }, [photoFiles]);
+
+  useEffect(() => {
+    manualPhotoPreviewUrlsRef.current = manualPhotoPreviewUrls;
+  }, [manualPhotoPreviewUrls]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(manualPhotoPreviewUrlsRef.current).forEach((url) => URL.revokeObjectURL(url));
+    };
   }, []);
 
   const drawDataUrlOnCanvas = useCallback((dataUrl: string) => {
@@ -2696,15 +2752,47 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
               </p>
               {photoFiles.length > 0 && (
                 <div className="space-y-2">
+                  <p className="text-[11px] text-slate-400">
+                    La primera imagen queda como portada. Usa las flechas o el botón Portada para reordenar.
+                  </p>
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                     {photoFiles.map((file, index) => {
                       const key = makePhotoKey(file);
                       const isEdited = Boolean(editedPhotos[key]);
+                      const isCover = index === 0;
+                      const previewSrc = editedPhotos[key] || manualPhotoPreviewUrls[key] || "";
                       return (
                         <div
                           key={`${file.name}-${file.lastModified}-${index}`}
-                          className="rounded-lg border border-slate-700 bg-slate-900/70 p-2 text-xs text-slate-200"
+                          className={`rounded-lg border p-2 text-xs text-slate-200 ${
+                            isCover
+                              ? "border-emerald-400/60 bg-emerald-500/10"
+                              : "border-slate-700 bg-slate-900/70"
+                          }`}
                         >
+                          <div className="relative overflow-hidden rounded-md border border-slate-700 bg-slate-950/70">
+                            {previewSrc ? (
+                              <img
+                                src={previewSrc}
+                                alt={`Miniatura ${index + 1}`}
+                                className="h-24 w-full object-cover"
+                                loading="lazy"
+                                decoding="async"
+                              />
+                            ) : (
+                              <div className="flex h-24 w-full items-center justify-center text-[10px] text-slate-500">
+                                Sin vista previa
+                              </div>
+                            )}
+                            <span className="absolute bottom-1 left-1 rounded bg-black/70 px-1.5 py-0.5 text-[10px] text-slate-100">
+                              {index + 1}
+                            </span>
+                            {isCover && (
+                              <span className="absolute right-1 top-1 rounded-full bg-emerald-500/90 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white">
+                                Portada
+                              </span>
+                            )}
+                          </div>
                           <p className="truncate" title={file.name}>
                             {file.name}
                           </p>
@@ -2714,6 +2802,31 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                                 Editada
                               </span>
                             )}
+                            {!isCover && (
+                              <button
+                                type="button"
+                                className="text-[11px] text-emerald-300 hover:text-emerald-200"
+                                onClick={() => setManualCoverPhoto(index)}
+                              >
+                                Portada
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className="text-[11px] text-slate-300 hover:text-slate-100 disabled:opacity-40"
+                              onClick={() => moveManualPhoto(index, index - 1)}
+                              disabled={index === 0}
+                            >
+                              ←
+                            </button>
+                            <button
+                              type="button"
+                              className="text-[11px] text-slate-300 hover:text-slate-100 disabled:opacity-40"
+                              onClick={() => moveManualPhoto(index, index + 1)}
+                              disabled={index >= photoFiles.length - 1}
+                            >
+                              →
+                            </button>
                             <button
                               type="button"
                               className="text-[11px] text-amber-300 hover:text-amber-200"
