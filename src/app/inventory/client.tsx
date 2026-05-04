@@ -541,14 +541,25 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   };
 
   const fetchInventoryPage = useCallback(
-    async (page: number, options?: { preserveSelection?: boolean }) => {
+    async (page: number, options?: { preserveSelection?: boolean; statusFilter?: string | null }) => {
       const targetPage = Math.max(1, page);
       setLoadingPage(true);
       try {
+        const hasStatusFilterOverride = Boolean(
+          options && Object.prototype.hasOwnProperty.call(options, "statusFilter")
+        );
+        const activeStatusFilter = hasStatusFilterOverride
+          ? options?.statusFilter ?? null
+          : statusFilter;
+        const normalizedStatus = activeStatusFilter?.toString().trim().toUpperCase() ?? null;
+
         const params = new URLSearchParams({
           page: targetPage.toString(),
           pageSize: pageSizeRef.current.toString()
         });
+        if (normalizedStatus) {
+          params.set("statusFilter", normalizedStatus);
+        }
         const res = await fetch(`/api/inventory?${params.toString()}`, { cache: "no-store" });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -620,7 +631,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         setLoadingPage(false);
       }
     },
-    [updatingIds]
+    [updatingIds, statusFilter]
   );
 
   const refresh = useCallback(async () => {
@@ -2686,7 +2697,11 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                   <button
                     type="button"
                     key={label}
-                    onClick={() => setStatusFilter(isActive ? null : label)}
+                    onClick={() => {
+                      const nextStatus = isActive ? null : label;
+                      setStatusFilter(nextStatus);
+                      void fetchInventoryPage(1, { preserveSelection: false, statusFilter: nextStatus });
+                    }}
                     className={`${baseClasses} ${activeClasses}`}
                   >
                     <span className="text-base font-bold text-amber-300">{count}</span>
