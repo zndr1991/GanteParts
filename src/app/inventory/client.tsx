@@ -56,11 +56,17 @@ type InventoryClientProps = {
   mode?: "full" | "manual-only";
 };
 
+type PhotoEditorTarget =
+  | { type: "manual"; key: string }
+  | { type: "modal"; index: number };
+
 type PhotoEditorState = {
-  key: string;
   title: string;
   dataUrl: string;
+  target: PhotoEditorTarget;
 };
+
+type AnnotationTool = "brush" | "circle" | "arrow";
 
 type SortKey = "estatusInterno" | "pieza" | "sku" | "status" | "marca" | "coche" | "ano" | "precio";
 
@@ -374,6 +380,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const modalPhotoInputRef = useRef<HTMLInputElement | null>(null);
   const editorCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const photoEditorBaseRef = useRef<string | null>(null);
+  const shapeSnapshotRef = useRef<HTMLCanvasElement | null>(null);
+  const shapeStartPointRef = useRef<{ x: number; y: number } | null>(null);
   const [photoFiles, setPhotoFiles] = useState<File[]>([]);
   const [editedPhotos, setEditedPhotos] = useState<Record<string, string>>({});
   const [photoEditor, setPhotoEditor] = useState<PhotoEditorState | null>(null);
@@ -382,6 +390,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [photoEditorError, setPhotoEditorError] = useState<string | null>(null);
   const [photoEditorSaving, setPhotoEditorSaving] = useState(false);
   const [drawingMode, setDrawingMode] = useState(false);
+  const [annotationTool, setAnnotationTool] = useState<AnnotationTool>("brush");
   const [isDrawingStroke, setIsDrawingStroke] = useState(false);
   const [drawingColor, setDrawingColor] = useState(drawingColors[0]);
   const [brushSize, setBrushSize] = useState(4);
@@ -880,8 +889,13 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         const baseData = editedPhotos[key] ?? (await readFileAsDataUrl(file));
         const normalized = await normalizeDataUrlSize(baseData);
         photoEditorBaseRef.current = normalized;
-        setPhotoEditor({ key, title: file.name, dataUrl: normalized });
+        setPhotoEditor({
+          title: file.name,
+          dataUrl: normalized,
+          target: { type: "manual", key }
+        });
         setDrawingMode(false);
+        setAnnotationTool("brush");
         setBrushSize(4);
         setDrawingColor(drawingColors[0]);
         setPendingText(null);
@@ -893,13 +907,41 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     [editedPhotos, setMessage]
   );
 
+  const openPhotoEditorForModalPhoto = useCallback(
+    async (index: number) => {
+      const current = modalPhotos[index];
+      if (!current) return;
+      try {
+        const normalized = await normalizeDataUrlSize(current);
+        photoEditorBaseRef.current = normalized;
+        setPhotoEditor({
+          title: `${photoModal?.title || "Item"} · Foto ${index + 1}`,
+          dataUrl: normalized,
+          target: { type: "modal", index }
+        });
+        setDrawingMode(false);
+        setAnnotationTool("brush");
+        setBrushSize(4);
+        setDrawingColor(drawingColors[0]);
+        setPendingText(null);
+        setPhotoEditorError(null);
+      } catch (err: any) {
+        setPhotoModalError(err?.message || "No se pudo abrir el editor de la foto");
+      }
+    },
+    [modalPhotos, photoModal]
+  );
+
   const closePhotoEditor = useCallback(() => {
     setPhotoEditor(null);
     setPhotoEditorError(null);
     setDrawingMode(false);
+    setAnnotationTool("brush");
     setPendingText(null);
     setIsDrawingStroke(false);
     setPhotoEditorReady(false);
+    shapeSnapshotRef.current = null;
+    shapeStartPointRef.current = null;
     photoEditorBaseRef.current = null;
   }, []);
 
@@ -908,6 +950,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     const base = photoEditorBaseRef.current ?? photoEditor.dataUrl;
     drawDataUrlOnCanvas(base);
     setDrawingMode(false);
+    setAnnotationTool("brush");
+    shapeSnapshotRef.current = null;
+    shapeStartPointRef.current = null;
   }, [photoEditor, drawDataUrlOnCanvas]);
 
   const rotateEditorCanvas = useCallback(
@@ -977,6 +1022,48 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     return { x, y };
   };
 
+  const drawCircleAnnotation = useCallback(
+    (ctx: CanvasRenderingContext2D, start: { x: number; y: number }, end: { x: number; y: number }) => {
+      const radius = Math.hypot(end.x - start.x, end.y - start.y);
+      ctx.strokeStyle = drawingColor;
+      ctx.lineWidth = brushSize;
+      ctx.beginPath();
+      ctx.arc(start.x, start.y, radius, 0, Math.PI * 2);
+      ctx.stroke();
+    },
+    [brushSize, drawingColor]
+  );
+
+  const drawArrowAnnotation = useCallback(
+    (ctx: CanvasRenderingContext2D, start: { x: number; y: number }, end: { x: number; y: number }) => {
+      const headLength = Math.max(12, brushSize * 3);
+      const angle = Math.atan2(end.y - start.y, end.x - start.x);
+      ctx.strokeStyle = drawingColor;
+      ctx.lineWidth = brushSize;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(end.x, end.y);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(end.x, end.y);
+      ctx.lineTo(
+        end.x - headLength * Math.cos(angle - Math.PI / 6),
+        end.y - headLength * Math.sin(angle - Math.PI / 6)
+      );
+      ctx.lineTo(
+        end.x - headLength * Math.cos(angle + Math.PI / 6),
+        end.y - headLength * Math.sin(angle + Math.PI / 6)
+      );
+      ctx.closePath();
+      ctx.fillStyle = drawingColor;
+      ctx.fill();
+    },
+    [brushSize, drawingColor]
+  );
+
   const handleEditorPointerDown = useCallback(
     (evt: React.PointerEvent<HTMLCanvasElement>) => {
       if (!photoEditorReady || !editorCanvasRef.current) return;
@@ -997,6 +1084,19 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       if (!drawingMode) return;
       evt.preventDefault();
       const { x, y } = getCanvasPoint(evt);
+      if (annotationTool !== "brush") {
+        const snapshot = document.createElement("canvas");
+        snapshot.width = canvas.width;
+        snapshot.height = canvas.height;
+        const snapshotCtx = snapshot.getContext("2d");
+        if (!snapshotCtx) return;
+        snapshotCtx.drawImage(canvas, 0, 0);
+        shapeSnapshotRef.current = snapshot;
+        shapeStartPointRef.current = { x, y };
+        setIsDrawingStroke(true);
+        canvas.setPointerCapture?.(evt.pointerId);
+        return;
+      }
       ctx.strokeStyle = drawingColor;
       ctx.lineWidth = brushSize;
       ctx.lineCap = "round";
@@ -1006,7 +1106,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       setIsDrawingStroke(true);
       canvas.setPointerCapture?.(evt.pointerId);
     },
-    [brushSize, drawingColor, drawingMode, pendingText, photoEditorReady]
+    [annotationTool, brushSize, drawingColor, drawingMode, pendingText, photoEditorReady]
   );
 
   const handleEditorPointerMove = useCallback(
@@ -1017,10 +1117,23 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       const { x, y } = getCanvasPoint(evt);
+      if (annotationTool === "circle" || annotationTool === "arrow") {
+        const snapshot = shapeSnapshotRef.current;
+        const startPoint = shapeStartPointRef.current;
+        if (!snapshot || !startPoint) return;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(snapshot, 0, 0);
+        if (annotationTool === "circle") {
+          drawCircleAnnotation(ctx, startPoint, { x, y });
+        } else {
+          drawArrowAnnotation(ctx, startPoint, { x, y });
+        }
+        return;
+      }
       ctx.lineTo(x, y);
       ctx.stroke();
     },
-    [drawingMode, isDrawingStroke]
+    [annotationTool, drawArrowAnnotation, drawCircleAnnotation, drawingMode, isDrawingStroke]
   );
 
   const handleEditorPointerUp = useCallback(
@@ -1028,14 +1141,30 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       if (!editorCanvasRef.current) return;
       const canvas = editorCanvasRef.current;
       const ctx = canvas.getContext("2d");
-      if (drawingMode && isDrawingStroke && ctx) {
+      if (drawingMode && isDrawingStroke && ctx && annotationTool === "brush") {
         evt.preventDefault();
         ctx.closePath();
       }
+      if (drawingMode && isDrawingStroke && ctx && (annotationTool === "circle" || annotationTool === "arrow")) {
+        const snapshot = shapeSnapshotRef.current;
+        const startPoint = shapeStartPointRef.current;
+        if (snapshot && startPoint) {
+          const endPoint = getCanvasPoint(evt);
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(snapshot, 0, 0);
+          if (annotationTool === "circle") {
+            drawCircleAnnotation(ctx, startPoint, endPoint);
+          } else {
+            drawArrowAnnotation(ctx, startPoint, endPoint);
+          }
+        }
+      }
       canvas.releasePointerCapture?.(evt.pointerId);
+      shapeSnapshotRef.current = null;
+      shapeStartPointRef.current = null;
       setIsDrawingStroke(false);
     },
-    [drawingMode, isDrawingStroke]
+    [annotationTool, drawArrowAnnotation, drawCircleAnnotation, drawingMode, isDrawingStroke]
   );
 
   const handleAddText = useCallback(() => {
@@ -1053,12 +1182,26 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       setPhotoEditorSaving(true);
       const dataUrl = editorCanvasRef.current.toDataURL("image/jpeg", PHOTO_QUALITY);
       const normalized = await normalizeDataUrlSize(dataUrl);
-      setEditedPhotos((prev) => ({ ...prev, [photoEditor.key]: normalized }));
+      if (photoEditor.target.type === "manual") {
+        setEditedPhotos((prev) => ({ ...prev, [photoEditor.target.key]: normalized }));
+      } else {
+        const targetIndex = photoEditor.target.index;
+        setModalPhotos((prev) => {
+          if (targetIndex < 0 || targetIndex >= prev.length) return prev;
+          const next = [...prev];
+          next[targetIndex] = normalized;
+          return next;
+        });
+        setModalActiveIndex(targetIndex);
+      }
       setPhotoEditor(null);
       photoEditorBaseRef.current = null;
       setDrawingMode(false);
+      setAnnotationTool("brush");
       setPendingText(null);
       setIsDrawingStroke(false);
+      shapeSnapshotRef.current = null;
+      shapeStartPointRef.current = null;
     } catch (err: any) {
       setPhotoEditorError(err?.message || "No se pudo guardar la foto editada");
     } finally {
@@ -1181,6 +1324,46 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       return next;
     });
   };
+
+  const moveModalPhoto = useCallback((fromIndex: number, toIndex: number) => {
+    setModalPhotos((prev) => {
+      if (fromIndex < 0 || fromIndex >= prev.length || toIndex < 0 || toIndex >= prev.length) {
+        return prev;
+      }
+      if (fromIndex === toIndex) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+    setModalActiveIndex((current) => {
+      if (current === fromIndex) return toIndex;
+      if (fromIndex < current && current <= toIndex) return current - 1;
+      if (toIndex <= current && current < fromIndex) return current + 1;
+      return current;
+    });
+  }, []);
+
+  const moveActiveModalPhoto = useCallback(
+    (direction: "left" | "right") => {
+      if (!modalPhotos.length) return;
+      const from = modalActiveIndex;
+      const to = direction === "left"
+        ? Math.max(0, from - 1)
+        : Math.min(modalPhotos.length - 1, from + 1);
+      if (from === to) return;
+      moveModalPhoto(from, to);
+    },
+    [modalActiveIndex, modalPhotos.length, moveModalPhoto]
+  );
+
+  const setModalCoverPhoto = useCallback(
+    (index: number) => {
+      if (index <= 0 || index >= modalPhotos.length) return;
+      moveModalPhoto(index, 0);
+    },
+    [modalPhotos.length, moveModalPhoto]
+  );
 
   const saveModalPhotos = async () => {
     if (!photoModal) return;
@@ -3277,7 +3460,11 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
               {pendingText
                 ? "Toca la imagen para colocar el texto."
                 : drawingMode
-                ? "Arrastra con el dedo o el mouse para dibujar."
+                ? annotationTool === "brush"
+                  ? "Arrastra con el dedo o el mouse para dibujar."
+                  : annotationTool === "circle"
+                    ? "Arrastra para trazar un círculo."
+                    : "Arrastra para trazar una flecha."
                 : "Activa el modo dibujo o agrega texto para resaltar detalles."}
             </p>
             <div className="mt-4 space-y-4 text-sm">
@@ -3328,6 +3515,28 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 >
                   {drawingMode ? "Salir de dibujo" : "Modo dibujo"}
                 </button>
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-400">Herramienta:</span>
+                  {([
+                    { id: "brush", label: "Pincel" },
+                    { id: "circle", label: "Círculo" },
+                    { id: "arrow", label: "Flecha" }
+                  ] as Array<{ id: AnnotationTool; label: string }>).map((tool) => (
+                    <button
+                      key={tool.id}
+                      type="button"
+                      className={`rounded-md border px-2 py-1 ${
+                        annotationTool === tool.id
+                          ? "border-amber-400 bg-amber-500/10 text-amber-100"
+                          : "border-slate-600 text-slate-300"
+                      }`}
+                      onClick={() => setAnnotationTool(tool.id)}
+                      disabled={!photoEditorReady}
+                    >
+                      {tool.label}
+                    </button>
+                  ))}
+                </div>
                 <div className="flex items-center gap-2">
                   <span className="text-slate-400">Color:</span>
                   {drawingColors.map((color) => (
@@ -3431,6 +3640,11 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                           alt={`Foto ${modalActiveIndex + 1}`}
                           className="h-full w-full object-contain"
                         />
+                        {modalActiveIndex === 0 && (
+                          <span className="absolute left-3 top-3 rounded-full bg-emerald-500/90 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-white">
+                            Portada
+                          </span>
+                        )}
                         {modalPhotos.length > 1 && (
                           <>
                             <button
@@ -3460,6 +3674,39 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                           {modalActiveIndex + 1} / {modalPhotos.length}
                         </div>
                       </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className="rounded-md border border-slate-600 px-3 py-1.5 text-xs uppercase tracking-wide text-slate-200 hover:border-amber-300"
+                          onClick={() => openPhotoEditorForModalPhoto(modalActiveIndex)}
+                        >
+                          Editar foto
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-md border border-slate-600 px-3 py-1.5 text-xs uppercase tracking-wide text-slate-200 hover:border-amber-300 disabled:opacity-50"
+                          onClick={() => moveActiveModalPhoto("left")}
+                          disabled={modalActiveIndex === 0}
+                        >
+                          Mover izquierda
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-md border border-slate-600 px-3 py-1.5 text-xs uppercase tracking-wide text-slate-200 hover:border-amber-300 disabled:opacity-50"
+                          onClick={() => moveActiveModalPhoto("right")}
+                          disabled={modalActiveIndex >= modalPhotos.length - 1}
+                        >
+                          Mover derecha
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-md border border-emerald-400/50 px-3 py-1.5 text-xs uppercase tracking-wide text-emerald-200 hover:bg-emerald-500/10 disabled:opacity-50"
+                          onClick={() => setModalCoverPhoto(modalActiveIndex)}
+                          disabled={modalActiveIndex === 0}
+                        >
+                          Elegir portada
+                        </button>
+                      </div>
                       <div className="flex gap-2 overflow-x-auto pb-2">
                         {modalPhotos.map((src, index) => (
                           <div
@@ -3470,6 +3717,11 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                                 : "border-slate-700"
                             } bg-slate-800 p-1`}
                           >
+                            {index === 0 && (
+                              <span className="absolute left-1 top-1 rounded bg-emerald-500/90 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white">
+                                Portada
+                              </span>
+                            )}
                             <button
                               type="button"
                               className="block h-16 w-16 overflow-hidden rounded-md"
@@ -3477,6 +3729,15 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                             >
                               <img src={src} alt={`Thumb ${index + 1}`} className="h-full w-full object-cover" />
                             </button>
+                            {index > 0 && (
+                              <button
+                                type="button"
+                                className="absolute -bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-emerald-700/90 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-emerald-100 hover:bg-emerald-600"
+                                onClick={() => setModalCoverPhoto(index)}
+                              >
+                                Portada
+                              </button>
+                            )}
                             <button
                               type="button"
                               className="absolute -top-2 -right-2 flex h-5 w-5 items-center justify-center rounded-full bg-black/70 text-[10px] text-white hover:bg-black/90"
