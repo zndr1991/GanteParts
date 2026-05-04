@@ -1182,10 +1182,12 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       setPhotoEditorSaving(true);
       const dataUrl = editorCanvasRef.current.toDataURL("image/jpeg", PHOTO_QUALITY);
       const normalized = await normalizeDataUrlSize(dataUrl);
-      if (photoEditor.target.type === "manual") {
-        setEditedPhotos((prev) => ({ ...prev, [photoEditor.target.key]: normalized }));
+      const target = photoEditor.target;
+      if (target.type === "manual") {
+        const targetKey = target.key;
+        setEditedPhotos((prev) => ({ ...prev, [targetKey]: normalized }));
       } else {
-        const targetIndex = photoEditor.target.index;
+        const targetIndex = target.index;
         setModalPhotos((prev) => {
           if (targetIndex < 0 || targetIndex >= prev.length) return prev;
           const next = [...prev];
