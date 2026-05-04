@@ -5,7 +5,7 @@ import { InventoryClient } from "./client";
 import type { InventoryClientItem, InventoryInitialPage } from "./client";
 import { getInventorySnapshot } from "@/lib/inventory-cache";
 
-const DEFAULT_INITIAL_PAGE_SIZE = 60;
+const DEFAULT_INITIAL_PAGE_SIZE = 100;
 const INVENTORY_FULL_PAGE_SIZE_ENV = Number(
   process.env.INVENTORY_INITIAL_LOAD_LIMIT ??
     process.env.INVENTORY_FULL_LOAD_LIMIT ??

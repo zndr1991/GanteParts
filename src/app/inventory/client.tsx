@@ -97,6 +97,7 @@ const brandOptions = [
 const deletePasswordSecret = (process.env.NEXT_PUBLIC_DELETE_PASSWORD ?? "").trim();
 
 const MAX_PHOTOS = MAX_ITEM_PHOTOS;
+const INVENTORY_PAGE_SIZE = 100;
 const MAX_PHOTO_DIMENSION = 1280; // ancho/alto maximo al comprimir
 const PHOTO_QUALITY = 0.8; // calidad JPEG al recomprimir
 const drawingColors = ["#f87171", "#facc15", "#4ade80", "#38bdf8", "#f472b6", "#ffffff"];
@@ -376,17 +377,17 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastNotificationIdRef = useRef<string | null>(null);
   const isMountedRef = useRef(true);
-  const autoLoadAttemptedRef = useRef(false);
   const localEstatusInternoRef = useRef(
     new Map<string, { value: string; updatedAt: number; prestadoVendidoA?: string | null }>()
   );
   const [isMobile, setIsMobile] = useState(false);
-  const pageSizeRef = useRef(initialPage.pageSize);
+  const pageSizeRef = useRef(Math.max(1, initialPage.pageSize || INVENTORY_PAGE_SIZE));
+  const [currentPage, setCurrentPage] = useState(Math.max(1, initialPage.page || 1));
   const [totalItems, setTotalItems] = useState(initialPage.total);
-  const [loadingAll, setLoadingAll] = useState(false);
-  const [bootstrappingAllInventory, setBootstrappingAllInventory] = useState(
-    !isManualOnly && initialPage.items.length < initialPage.total
+  const [totalPages, setTotalPages] = useState(
+    Math.max(1, initialPage.totalPages ?? Math.ceil(initialPage.total / Math.max(1, initialPage.pageSize || INVENTORY_PAGE_SIZE)))
   );
+  const [loadingPage, setLoadingPage] = useState(false);
   const [sectionVisibility, setSectionVisibility] = useState<Record<SectionKey, boolean>>({
     notifications: true,
     manual: true,
@@ -511,26 +512,19 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     }
   };
 
-  const loadAllItems = useCallback(async () => {
-    if (loadingAll) return;
-    setLoadingAll(true);
-    setMessage(null);
-    try {
-      let page = 1;
-      let total = 0;
-      let pageSize = Math.max(1, pageSizeRef.current || 60);
-      const collected: Item[] = [];
-      const seen = new Set<string>();
-
-      while (true) {
+  const fetchInventoryPage = useCallback(
+    async (page: number, options?: { preserveSelection?: boolean }) => {
+      const targetPage = Math.max(1, page);
+      setLoadingPage(true);
+      try {
         const params = new URLSearchParams({
-          page: page.toString(),
-          pageSize: pageSize.toString()
+          page: targetPage.toString(),
+          pageSize: pageSizeRef.current.toString()
         });
         const res = await fetch(`/api/inventory?${params.toString()}`, { cache: "no-store" });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          throw new Error(data.error || "No se pudo cargar el inventario completo");
+          throw new Error(data.error || "No se pudo obtener el inventario");
         }
 
         const incoming: Item[] = Array.isArray(data.items) ? data.items : [];
@@ -557,62 +551,62 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           return { ...item, extraData: nextExtra };
         });
 
-        if (typeof data.pageSize === "number" && data.pageSize > 0) {
-          pageSize = data.pageSize;
-          pageSizeRef.current = data.pageSize;
-        }
-        if (typeof data.total === "number" && data.total >= 0) {
-          total = data.total;
+        const nextPageSize = typeof data.pageSize === "number" && data.pageSize > 0 ? data.pageSize : pageSizeRef.current;
+        pageSizeRef.current = nextPageSize;
+        const nextTotal = typeof data.total === "number" && data.total >= 0 ? data.total : incomingWithLocal.length;
+        const nextTotalPages =
+          typeof data.totalPages === "number" && data.totalPages > 0
+            ? data.totalPages
+            : Math.max(1, Math.ceil(nextTotal / Math.max(1, nextPageSize)));
+        const normalizedPage =
+          typeof data.page === "number" && data.page > 0
+            ? Math.min(data.page, nextTotalPages)
+            : Math.min(targetPage, nextTotalPages);
+
+        if (!incomingWithLocal.length && nextTotal > 0 && normalizedPage > 1) {
+          await fetchInventoryPage(normalizedPage - 1, options);
+          return;
         }
 
-        incomingWithLocal.forEach((item) => {
-          if (seen.has(item.id)) return;
-          seen.add(item.id);
-          collected.push(item);
+        setItems((current) => {
+          if (!updatingIds.length) {
+            return incomingWithLocal;
+          }
+          const updatingSet = new Set(updatingIds);
+          const currentMap = new Map(current.map((item) => [item.id, item]));
+          return incomingWithLocal.map((item) => (updatingSet.has(item.id) ? currentMap.get(item.id) ?? item : item));
         });
+        setTotalItems(nextTotal);
+        setTotalPages(nextTotalPages);
+        setCurrentPage(normalizedPage);
 
-        if (!incomingWithLocal.length) break;
-        if (total > 0 && collected.length >= total) break;
-        if (incomingWithLocal.length < pageSize) break;
-
-        page += 1;
-      }
-
-      const finalTotal = total || collected.length;
-      setTotalItems(finalTotal);
-      setItems((current) => {
-        if (!updatingIds.length) {
-          return collected;
+        if (!options?.preserveSelection) {
+          setSelectedIds([]);
+          setFocusedRowInfo(null);
         }
-        const updatingSet = new Set(updatingIds);
-        const currentMap = new Map(current.map((item) => [item.id, item]));
-        return collected.map((item) => (updatingSet.has(item.id) ? currentMap.get(item.id) ?? item : item));
-      });
-      setBootstrappingAllInventory(false);
-      setSelectedIds([]);
-      setFocusedRowInfo(null);
-    } catch (err: any) {
-      setBootstrappingAllInventory(false);
-      setMessage(err?.message || "No se pudo cargar el inventario completo");
-    } finally {
-      setLoadingAll(false);
-    }
-  }, [loadingAll, setMessage, updatingIds]);
+      } catch (err: any) {
+        setMessage(err?.message || "No se pudo obtener el inventario");
+      } finally {
+        setLoadingPage(false);
+      }
+    },
+    [updatingIds]
+  );
 
   const refresh = useCallback(async () => {
     if (isManualOnly) return;
-    await loadAllItems();
-  }, [isManualOnly, loadAllItems]);
+    await fetchInventoryPage(currentPage, { preserveSelection: false });
+  }, [isManualOnly, fetchInventoryPage, currentPage]);
 
-  useEffect(() => {
-    if (isManualOnly) return;
-    if (autoLoadAttemptedRef.current) return;
-    if (items.length >= totalItems) return;
-    autoLoadAttemptedRef.current = true;
-    void loadAllItems();
-  }, [isManualOnly, items.length, totalItems, loadAllItems]);
+  const goToPreviousPage = useCallback(async () => {
+    if (loadingPage || currentPage <= 1) return;
+    await fetchInventoryPage(currentPage - 1);
+  }, [loadingPage, currentPage, fetchInventoryPage]);
 
-  const shouldHidePartialInventory = !isManualOnly && bootstrappingAllInventory;
+  const goToNextPage = useCallback(async () => {
+    if (loadingPage || currentPage >= totalPages) return;
+    await fetchInventoryPage(currentPage + 1);
+  }, [loadingPage, currentPage, totalPages, fetchInventoryPage]);
 
   const deleteItems = useCallback(async (ids: string[], password?: string) => {
     if (!ids.length) return;
@@ -2607,19 +2601,15 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
             </div>
           )}
           <p className="text-xs text-slate-400">
-            {shouldHidePartialInventory || loadingAll
-              ? `Cargando inventario completo (${items.length}/${totalItems})...`
-              : `Mostrando ${items.length} registros`}
+            {loadingPage
+              ? `Cargando pagina ${currentPage}...`
+              : `Pagina ${currentPage} de ${totalPages} · Mostrando ${items.length} de ${totalItems} registros`}
           </p>
           <div
             className="mt-4 overflow-auto rounded-2xl border border-slate-800 bg-slate-950/30 shadow-inner shadow-black/40"
             style={{ maxHeight: tableHeaderHeight + tableVisibleRows * tableRowHeight }}
           >
-            {shouldHidePartialInventory ? (
-              <div className="p-8 text-center text-sm text-slate-300">
-                Cargando inventario completo. Espera un momento...
-              </div>
-            ) : filteredItems.length === 0 ? (
+            {filteredItems.length === 0 ? (
               <div className="p-8 text-center text-sm text-slate-400">
                 No hay registros que coincidan con el filtro aplicado.
               </div>
@@ -3058,6 +3048,30 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 </tbody>
               </table>
             )}
+          </div>
+          <div className="mt-4 flex flex-col items-center gap-2 sm:flex-row sm:justify-between">
+            <p className="text-[11px] text-slate-500">100 registros por pagina</p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={goToPreviousPage}
+                disabled={loadingPage || currentPage <= 1}
+                className="rounded-md border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:border-amber-400 disabled:opacity-60"
+              >
+                Anterior
+              </button>
+              <span className="min-w-[120px] text-center text-xs text-slate-300">
+                Pagina {currentPage}/{totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={goToNextPage}
+                disabled={loadingPage || currentPage >= totalPages}
+                className="rounded-md border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:border-amber-400 disabled:opacity-60"
+              >
+                Siguiente
+              </button>
+            </div>
           </div>
         </section>
         </>
