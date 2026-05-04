@@ -46,6 +46,24 @@ type NotificationViewerState = {
   subtitle?: string | null;
 };
 
+type InventoryEditFormState = {
+  id: string;
+  skuInternal: string;
+  mlItemId: string;
+  estatusInterno: string;
+  stock: string;
+  pieza: string;
+  marca: string;
+  coche: string;
+  anoDesde: string;
+  anoHasta: string;
+  origen: string;
+  price: string;
+  precioCompra: string;
+  ubicacion: string;
+  prestadoVendidoA: string;
+};
+
 type SectionKey = "notifications" | "manual" | "import";
 
 type InventoryPageResponse = {
@@ -412,7 +430,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [photoModal, setPhotoModal] = useState<{ id: string; title: string } | null>(null);
   const [modalPhotos, setModalPhotos] = useState<string[]>([]);
   const [photoModalSaving, setPhotoModalSaving] = useState(false);
-  const [editingRowId, setEditingRowId] = useState<string | null>(null);
+  const [editingRowId] = useState<string | null>(null);
   const [sortConfig, setSortConfig] = useState<{
     key: SortKey;
     direction: "asc" | "desc";
@@ -420,6 +438,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [photoModalError, setPhotoModalError] = useState<string | null>(null);
   const [photoModalLoading, setPhotoModalLoading] = useState(false);
   const [modalActiveIndex, setModalActiveIndex] = useState(0);
+  const [inventoryEditForm, setInventoryEditForm] = useState<InventoryEditFormState | null>(null);
+  const [inventoryEditError, setInventoryEditError] = useState<string | null>(null);
+  const [inventoryEditSaving, setInventoryEditSaving] = useState(false);
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string | null>>({});
   const [thumbnailLoadingIds, setThumbnailLoadingIds] = useState<Record<string, boolean>>({});
   const [thumbnailErrors, setThumbnailErrors] = useState<Record<string, string | null>>({});
@@ -1908,6 +1929,15 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     )
   ).sort();
 
+  const piezaSuggestions = Array.from(
+    new Set(
+      items
+        .map((item) => item.extraData?.pieza)
+        .filter((p): p is string => Boolean(p && p.trim()))
+        .map((p) => p.toUpperCase())
+    )
+  ).sort();
+
   const ubicacionSuggestions = Array.from(
     new Set(
       items
@@ -1926,6 +1956,18 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       .map((c) => c.toUpperCase());
     return Array.from(new Set([...base, ...existing])).sort();
   })();
+
+  const editModelOptions = useMemo(() => {
+    const brand = (inventoryEditForm?.marca ?? "").toString().trim().toUpperCase();
+    if (!brand) return [];
+    const base = brandModels[brand] ?? [];
+    const existing = items
+      .filter((item) => (item.extraData?.marca ?? "").toString().toUpperCase() === brand)
+      .map((item) => item.extraData?.coche)
+      .filter((c): c is string => Boolean(c && c.trim()))
+      .map((c) => c.toUpperCase());
+    return Array.from(new Set([...base, ...existing])).sort();
+  }, [inventoryEditForm?.marca, items]);
 
   const anoDesdeNumber = form.anoDesde ? Number(form.anoDesde) : undefined;
   const anoHastaNumber = form.anoHasta ? Number(form.anoHasta) : undefined;
@@ -2213,6 +2255,170 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     },
     [canEditInventory, updateExtraDataInState]
   );
+
+  const openInventoryEditModal = useCallback((item: Item) => {
+    const extra = item.extraData ?? {};
+    const toText = (value: unknown) => (value === null || value === undefined ? "" : String(value));
+    setInventoryEditError(null);
+    setInventoryEditForm({
+      id: item.id,
+      skuInternal: toText(item.skuInternal).toUpperCase(),
+      mlItemId: toText(item.mlItemId).toUpperCase(),
+      estatusInterno: toText(extra.estatus_interno).toUpperCase(),
+      stock: Number.isFinite(item.stock as number) ? String(item.stock) : "0",
+      pieza: toText(extra.pieza).toUpperCase(),
+      marca: toText(extra.marca).toUpperCase(),
+      coche: toText(extra.coche).toUpperCase(),
+      anoDesde: toText(extra.ano_desde),
+      anoHasta: toText(extra.ano_hasta),
+      origen: toText(extra.origen).toUpperCase(),
+      price: item.price === null || item.price === undefined ? "" : String(item.price),
+      precioCompra: extra.precio_compra === null || extra.precio_compra === undefined ? "" : String(extra.precio_compra),
+      ubicacion: toText(extra.ubicacion).toUpperCase(),
+      prestadoVendidoA: toText(extra.prestado_vendido_a).toUpperCase()
+    });
+  }, []);
+
+  const closeInventoryEditModal = useCallback(() => {
+    if (inventoryEditSaving) return;
+    setInventoryEditForm(null);
+    setInventoryEditError(null);
+  }, [inventoryEditSaving]);
+
+  const handleInventoryEditFieldChange = useCallback(
+    (field: keyof InventoryEditFormState, value: string) => {
+      setInventoryEditForm((current) => {
+        if (!current) return current;
+        return { ...current, [field]: value };
+      });
+    },
+    []
+  );
+
+  const saveInventoryEditModal = useCallback(async () => {
+    if (!inventoryEditForm) return;
+    if (!canEditInventory) {
+      setInventoryEditError("Tu rol no puede editar inventario");
+      return;
+    }
+
+    const skuInternal = inventoryEditForm.skuInternal.trim().toUpperCase();
+    if (!skuInternal) {
+      setInventoryEditError("SKU interno es obligatorio");
+      return;
+    }
+
+    const mlItemId = inventoryEditForm.mlItemId.trim().toUpperCase();
+    const estatusInterno = inventoryEditForm.estatusInterno.trim().toUpperCase();
+    const origen = inventoryEditForm.origen.trim().toUpperCase();
+    const pieza = inventoryEditForm.pieza.trim().toUpperCase();
+    const marca = inventoryEditForm.marca.trim().toUpperCase();
+    const coche = inventoryEditForm.coche.trim().toUpperCase();
+    const ubicacion = inventoryEditForm.ubicacion.trim().toUpperCase();
+    const prestadoVendidoA = inventoryEditForm.prestadoVendidoA.trim().toUpperCase();
+    const anoDesde = inventoryEditForm.anoDesde.trim();
+    const anoHasta = inventoryEditForm.anoHasta.trim();
+
+    if ((estatusInterno === "VENDIDO" || estatusInterno === "PRESTADO") && !prestadoVendidoA) {
+      setInventoryEditError(
+        estatusInterno === "VENDIDO" ? "Debes indicar a quien se vendio" : "Debes indicar a quien se presto"
+      );
+      return;
+    }
+
+    const stockRaw = inventoryEditForm.stock.trim();
+    const stockValue = stockRaw.length ? Number(stockRaw) : 0;
+    if (!Number.isInteger(stockValue) || stockValue < 0) {
+      setInventoryEditError("Stock invalido");
+      return;
+    }
+
+    const priceRaw = inventoryEditForm.price.replace(/[$,\s]/g, "").trim();
+    const priceValue = priceRaw.length ? Number(priceRaw) : null;
+    if (priceValue !== null && (!Number.isFinite(priceValue) || priceValue < 0)) {
+      setInventoryEditError("Precio invalido");
+      return;
+    }
+
+    const precioCompraRaw = inventoryEditForm.precioCompra.replace(/[$,\s]/g, "").trim();
+    const precioCompraValue = precioCompraRaw.length ? Number(precioCompraRaw) : null;
+    if (precioCompraValue !== null && (!Number.isFinite(precioCompraValue) || precioCompraValue < 0)) {
+      setInventoryEditError("Precio de compra invalido");
+      return;
+    }
+
+    if (!mlItemId && (estatusInterno === "PRESTADO" || estatusInterno === "ML")) {
+      setMessage("Este registro no tiene código de Mercado Libre; se guardará el estatus interno sin sincronizar.");
+    }
+
+    const nextStatus =
+      estatusInterno === "VENDIDO" || estatusInterno === "SIN SUBIR"
+        ? "inactive"
+        : estatusInterno === "PRESTADO"
+        ? mlItemId
+          ? "paused"
+          : undefined
+        : estatusInterno === "ML"
+        ? mlItemId
+          ? "active"
+          : undefined
+        : undefined;
+
+    const shouldStampDate = estatusInterno === "PRESTADO" || estatusInterno === "VENDIDO";
+    const fechaPrestamoPago = shouldStampDate ? new Date().toISOString() : null;
+
+    setInventoryEditSaving(true);
+    setInventoryEditError(null);
+
+    try {
+      const res = await fetch("/api/inventory", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: inventoryEditForm.id,
+          skuInternal,
+          mlItemId: mlItemId || null,
+          estatusInterno: estatusInterno || null,
+          status: nextStatus,
+          forceMlSync: estatusInterno === "ML",
+          fechaPrestamoPago,
+          prestadoVendidoA: prestadoVendidoA || null,
+          origen: origen || null,
+          ubicacion: ubicacion || null,
+          marca: marca || null,
+          coche: coche || null,
+          anoDesde: anoDesde || null,
+          anoHasta: anoHasta || null,
+          pieza: pieza || null,
+          stock: stockValue,
+          price: priceValue,
+          precioCompra: precioCompraValue
+        })
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "No se pudo actualizar el registro");
+      }
+
+      const { mlSyncError, ...updatedItem } = data as Record<string, any>;
+      setItems((current) =>
+        current.map((row) => (row.id === inventoryEditForm.id ? { ...row, ...(updatedItem as Partial<Item>) } : row))
+      );
+
+      setMessage(
+        mlSyncError
+          ? `Registro actualizado, pero ML falló: ${mlSyncError}`
+          : "Registro actualizado"
+      );
+
+      setInventoryEditForm(null);
+    } catch (err: any) {
+      setInventoryEditError(err?.message || "No se pudo actualizar el registro");
+    } finally {
+      setInventoryEditSaving(false);
+    }
+  }, [canEditInventory, inventoryEditForm]);
 
   const normalizedSearch = search.trim().toLowerCase();
   const searchFilteredItems = useMemo(() => {
@@ -3295,17 +3501,13 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                           {canEditInventory ? (
                             <button
                               type="button"
-                              className={`rounded-md border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide transition ${
-                                isEditing
-                                  ? "border-emerald-400/70 bg-emerald-500/10 text-emerald-200"
-                                  : "border-amber-400/60 text-amber-200 hover:border-amber-300"
-                              }`}
+                              className="rounded-md border border-amber-400/60 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-amber-200 transition hover:border-amber-300"
                               onClick={(event) => {
                                 event.stopPropagation();
-                                setEditingRowId((current) => (current === item.id ? null : item.id));
+                                openInventoryEditModal(item);
                               }}
                             >
-                              {isEditing ? "Listo" : "Editar"}
+                              Editar
                             </button>
                           ) : (
                             <span className="text-slate-500">-</span>
@@ -3571,10 +3773,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                                 className="rounded-md border border-amber-400/60 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-amber-200 hover:border-amber-300"
                                 onClick={(event) => {
                                   event.stopPropagation();
-                                  setEditingRowId((current) => (current === item.id ? null : item.id));
+                                  openInventoryEditModal(item);
                                 }}
                               >
-                                {isEditing ? "Listo" : "Editar"}
+                                Editar
                               </button>
                               <button
                                 type="button"
@@ -3627,6 +3829,186 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         )}
       </div>
       </main>
+      {inventoryEditForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-6xl rounded-2xl border border-slate-700 bg-slate-900 p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-100">Editar registro</h3>
+                <p className="text-xs text-slate-400">
+                  Ajusta cualquier campo de captura manual y guarda los cambios.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="rounded-md border border-slate-600 px-3 py-1.5 text-xs text-slate-200 hover:border-amber-300 disabled:opacity-50"
+                onClick={closeInventoryEditModal}
+                disabled={inventoryEditSaving}
+              >
+                Cerrar
+              </button>
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <input
+                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-amber-400 focus:outline-none"
+                placeholder="SKU interno *"
+                value={inventoryEditForm.skuInternal}
+                onChange={(event) => handleInventoryEditFieldChange("skuInternal", event.target.value.toUpperCase())}
+              />
+              <input
+                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-amber-400 focus:outline-none"
+                placeholder="Codigo ML"
+                value={inventoryEditForm.mlItemId}
+                onChange={(event) => handleInventoryEditFieldChange("mlItemId", event.target.value.toUpperCase())}
+              />
+              <select
+                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-amber-400 focus:outline-none"
+                value={inventoryEditForm.estatusInterno}
+                onChange={(event) => handleInventoryEditFieldChange("estatusInterno", event.target.value.toUpperCase())}
+              >
+                <option value="">SIN ESTATUS</option>
+                {sortedEstatusInternoOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+
+              <input
+                type="number"
+                min="0"
+                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-amber-400 focus:outline-none"
+                placeholder="Stock"
+                value={inventoryEditForm.stock}
+                onChange={(event) => handleInventoryEditFieldChange("stock", event.target.value)}
+              />
+              <input
+                list="edit-piece-options"
+                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-amber-400 focus:outline-none"
+                placeholder="Pieza"
+                value={inventoryEditForm.pieza}
+                onChange={(event) => handleInventoryEditFieldChange("pieza", event.target.value.toUpperCase())}
+              />
+              <input
+                list="edit-brand-options"
+                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-amber-400 focus:outline-none"
+                placeholder="Marca"
+                value={inventoryEditForm.marca}
+                onChange={(event) => handleInventoryEditFieldChange("marca", event.target.value.toUpperCase())}
+              />
+
+              <input
+                list="edit-model-options"
+                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-amber-400 focus:outline-none disabled:opacity-60"
+                placeholder={inventoryEditForm.marca ? "Coche" : "Coche (elige o escribe)"}
+                value={inventoryEditForm.coche}
+                onChange={(event) => handleInventoryEditFieldChange("coche", event.target.value.toUpperCase())}
+                disabled={!inventoryEditForm.marca && editModelOptions.length > 0}
+              />
+              <input
+                type="number"
+                min="1950"
+                max="2100"
+                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-amber-400 focus:outline-none"
+                placeholder="Año desde"
+                value={inventoryEditForm.anoDesde}
+                onChange={(event) => handleInventoryEditFieldChange("anoDesde", event.target.value)}
+              />
+              <input
+                type="number"
+                min="1950"
+                max="2100"
+                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-amber-400 focus:outline-none"
+                placeholder="Año hasta"
+                value={inventoryEditForm.anoHasta}
+                onChange={(event) => handleInventoryEditFieldChange("anoHasta", event.target.value)}
+              />
+
+              <select
+                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-amber-400 focus:outline-none"
+                value={inventoryEditForm.origen}
+                onChange={(event) => handleInventoryEditFieldChange("origen", event.target.value.toUpperCase())}
+              >
+                <option value="">Origen</option>
+                {sortedOrigenOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+              <input
+                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-amber-400 focus:outline-none"
+                placeholder="Precio"
+                value={inventoryEditForm.price}
+                onChange={(event) => handleInventoryEditFieldChange("price", event.target.value)}
+              />
+              <input
+                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-amber-400 focus:outline-none"
+                placeholder="Precio de compra"
+                value={inventoryEditForm.precioCompra}
+                onChange={(event) => handleInventoryEditFieldChange("precioCompra", event.target.value)}
+              />
+
+              <input
+                list="edit-ubicacion-options"
+                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-amber-400 focus:outline-none"
+                placeholder="Ubicacion"
+                value={inventoryEditForm.ubicacion}
+                onChange={(event) => handleInventoryEditFieldChange("ubicacion", event.target.value.toUpperCase())}
+              />
+              <input
+                className="sm:col-span-2 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-amber-400 focus:outline-none"
+                placeholder="Prestado/Vendido a"
+                value={inventoryEditForm.prestadoVendidoA}
+                onChange={(event) => handleInventoryEditFieldChange("prestadoVendidoA", event.target.value.toUpperCase())}
+              />
+            </div>
+
+            <datalist id="edit-piece-options">
+              {piezaSuggestions.map((pieza) => (
+                <option key={pieza} value={pieza} />
+              ))}
+            </datalist>
+            <datalist id="edit-brand-options">
+              {brandSuggestions.map((brand) => (
+                <option key={brand} value={brand} />
+              ))}
+            </datalist>
+            <datalist id="edit-model-options">
+              {editModelOptions.map((model) => (
+                <option key={model} value={model} />
+              ))}
+            </datalist>
+            <datalist id="edit-ubicacion-options">
+              {ubicacionSuggestions.map((ubicacion) => (
+                <option key={ubicacion} value={ubicacion} />
+              ))}
+            </datalist>
+
+            {inventoryEditError && <p className="mt-3 text-sm text-rose-300">{inventoryEditError}</p>}
+
+            <div className="mt-6 flex flex-wrap justify-end gap-3">
+              <button
+                type="button"
+                className="rounded-md border border-slate-600 px-4 py-2 text-xs text-slate-200 hover:border-amber-300 disabled:opacity-50"
+                onClick={closeInventoryEditModal}
+                disabled={inventoryEditSaving}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-teal-700 disabled:opacity-60"
+                onClick={saveInventoryEditModal}
+                disabled={inventoryEditSaving}
+              >
+                {inventoryEditSaving ? "Guardando..." : "Guardar cambios"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {photoEditor && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-6">
           <div className="w-full max-w-4xl rounded-2xl border border-slate-700 bg-slate-900 p-5 shadow-2xl">

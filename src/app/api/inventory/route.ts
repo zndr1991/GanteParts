@@ -45,6 +45,7 @@ const updateSchema = z.object({
   forceMlSync: z.boolean().optional(),
   fechaPrestamoPago: z.string().optional().nullable(),
   prestadoVendidoA: z.string().optional().nullable(),
+  pieza: z.string().optional().nullable(),
   origen: z.string().optional().nullable(),
   ubicacion: z.string().optional().nullable(),
   marca: z.string().optional().nullable(),
@@ -52,7 +53,9 @@ const updateSchema = z.object({
   anoDesde: z.string().optional().nullable(),
   anoHasta: z.string().optional().nullable(),
   photos: z.array(z.string().min(1)).max(MAX_ITEM_PHOTOS).optional(),
+  stock: z.number().int().min(0).optional(),
   price: z.number().nonnegative().nullable().optional(),
+  precioCompra: z.number().nonnegative().nullable().optional(),
   mlItemId: z.string().optional().nullable()
 });
 
@@ -320,6 +323,7 @@ export async function PATCH(req: Request) {
     forceMlSync,
     fechaPrestamoPago,
     prestadoVendidoA,
+    pieza,
     origen,
     ubicacion,
     marca,
@@ -327,7 +331,9 @@ export async function PATCH(req: Request) {
     anoDesde,
     anoHasta,
     photos,
+    stock,
     price,
+    precioCompra,
     mlItemId
   } = parsed.data;
 
@@ -358,6 +364,12 @@ export async function PATCH(req: Request) {
     nextExtra.prestado_vendido_a = prestadoVendidoA.trim();
   } else if (prestadoVendidoA === null) {
     delete nextExtra.prestado_vendido_a;
+  }
+
+  if (pieza && pieza.trim()) {
+    nextExtra.pieza = pieza.trim();
+  } else if (pieza === null) {
+    delete nextExtra.pieza;
   }
 
   if (origen && origen.trim()) {
@@ -405,6 +417,14 @@ export async function PATCH(req: Request) {
       nextExtra.photos = sanitized;
     } else {
       delete nextExtra.photos;
+    }
+  }
+
+  if (precioCompra !== undefined) {
+    if (precioCompra === null) {
+      delete nextExtra.precio_compra;
+    } else {
+      nextExtra.precio_compra = precioCompra;
     }
   }
 
@@ -456,6 +476,10 @@ export async function PATCH(req: Request) {
     updateData.price = price === null ? null : new Prisma.Decimal(price);
   }
 
+  if (stock !== undefined) {
+    updateData.stock = stock;
+  }
+
   let item;
   try {
     item = await prisma.inventoryItem.update({
@@ -479,6 +503,7 @@ export async function PATCH(req: Request) {
         status: status ?? null,
         fechaPrestamoPago: fechaPrestamoPago ?? null,
         prestadoVendidoA: prestadoVendidoA ?? null,
+        pieza: pieza ?? null,
         origen: origen ?? null,
         ubicacion: ubicacion ?? null,
         marca: marca ?? null,
@@ -486,7 +511,9 @@ export async function PATCH(req: Request) {
         anoDesde: anoDesde ?? null,
         anoHasta: anoHasta ?? null,
         skuInternal: skuInternal ?? null,
+        stock: stock ?? null,
         price: price ?? null,
+        precioCompra: precioCompra ?? null,
         mlItemId: mlItemId ?? null
       }
     }
