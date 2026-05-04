@@ -404,9 +404,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [downloading, setDownloading] = useState(false);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
-  const [notificationsPage, setNotificationsPage] = useState(1);
-  const [notificationsTotal, setNotificationsTotal] = useState(0);
-  const [notificationsTotalPages, setNotificationsTotalPages] = useState(1);
   const [notificationsSearch, setNotificationsSearch] = useState("");
   const [toastNotification, setToastNotification] = useState<NotificationItem | null>(null);
   const [notificationViewer, setNotificationViewer] = useState<NotificationViewerState | null>(null);
@@ -522,9 +519,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     }, 6000);
   }, []);
 
-  const fetchNotifications = useCallback(async (options?: { silent?: boolean; page?: number; search?: string }) => {
+  const fetchNotifications = useCallback(async (options?: { silent?: boolean; search?: string }) => {
     const silent = Boolean(options?.silent);
-    const targetPage = Math.max(1, options?.page ?? notificationsPage);
     const useOverrideSearch = Boolean(options && Object.prototype.hasOwnProperty.call(options, "search"));
     const searchTerm = (useOverrideSearch ? options?.search ?? "" : notificationsSearch).trim();
     if (!silent && isMountedRef.current) {
@@ -532,7 +528,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     }
     try {
       const params = new URLSearchParams({
-        page: String(targetPage),
         pageSize: String(NOTIFICATIONS_PAGE_SIZE)
       });
       if (searchTerm.length) {
@@ -545,16 +540,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       }
       const data = await res.json().catch(() => ({}));
       const list: NotificationItem[] = Array.isArray(data.notifications) ? data.notifications : [];
-      const total = Number(data.total ?? list.length);
-      const totalPages = Math.max(1, Number(data.totalPages ?? Math.ceil(total / NOTIFICATIONS_PAGE_SIZE)));
-      const serverPage = Math.max(1, Number(data.page ?? targetPage));
       if (!isMountedRef.current) return;
       setNotifications(list);
-      setNotificationsTotal(Number.isFinite(total) ? total : list.length);
-      setNotificationsTotalPages(Number.isFinite(totalPages) ? totalPages : 1);
-      setNotificationsPage(serverPage);
 
-      if (!searchTerm.length && serverPage === 1 && list.length) {
+      if (!searchTerm.length && list.length) {
         const newest = list[0];
         if (!lastNotificationIdRef.current) {
           lastNotificationIdRef.current = newest.id;
@@ -574,27 +563,20 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         setNotificationsLoading(false);
       }
     }
-  }, [notificationsPage, notificationsSearch, triggerNotificationToast]);
+  }, [notificationsSearch, triggerNotificationToast]);
 
   const handleNotificationsSearchSubmit = useCallback(
     (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
-      void fetchNotifications({ silent: false, page: 1 });
+      void fetchNotifications({ silent: false });
     },
     [fetchNotifications]
   );
 
   const clearNotificationsSearch = useCallback(() => {
     setNotificationsSearch("");
-    void fetchNotifications({ silent: false, page: 1, search: "" });
+    void fetchNotifications({ silent: false, search: "" });
   }, [fetchNotifications]);
-
-  const goToNotificationPage = useCallback(
-    (page: number) => {
-      void fetchNotifications({ silent: false, page });
-    },
-    [fetchNotifications]
-  );
 
   useEffect(() => {
     return () => {
@@ -620,10 +602,13 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     if (isManualOnly) {
       return undefined;
     }
-    fetchNotifications({ silent: true });
-    const interval = setInterval(() => fetchNotifications({ silent: true }), NOTIFICATIONS_POLL_INTERVAL_MS);
+    if (notificationsSearch.trim().length) {
+      return undefined;
+    }
+    fetchNotifications({ silent: true, search: "" });
+    const interval = setInterval(() => fetchNotifications({ silent: true, search: "" }), NOTIFICATIONS_POLL_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [fetchNotifications, isManualOnly]);
+  }, [fetchNotifications, isManualOnly, notificationsSearch]);
 
   const downloadTemplate = async () => {
     setDownloading(true);
@@ -2610,14 +2595,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     };
   }, [thumbnailsActive, filteredItems, ensureThumbnail, thumbnailCache, thumbnailLoadingIds]);
 
-  const notificationsRangeStart =
-    notificationsTotal > 0 && notifications.length > 0
-      ? (notificationsPage - 1) * NOTIFICATIONS_PAGE_SIZE + 1
-      : 0;
-  const notificationsRangeEnd =
-    notificationsRangeStart > 0 ? notificationsRangeStart + notifications.length - 1 : 0;
-
-
   return (
     <>
       {!isManualOnly && toastNotification && (
@@ -2726,7 +2703,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="text-lg font-semibold">Notificaciones Mercado Libre</h2>
-              <p className="text-xs text-slate-400">Historial completo con busqueda y paginacion de 30 en 30.</p>
+              <p className="text-xs text-slate-400">Mostrando las ultimas 30 notificaciones. Usa el buscador para encontrar eventos anteriores.</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <button
@@ -2839,39 +2816,12 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                     </li>
                   ))}
                 </ul>
-
-                <div className="flex flex-col gap-2 rounded-xl border border-slate-700 bg-slate-950/30 p-3 text-xs text-slate-300 sm:flex-row sm:items-center sm:justify-between">
-                  <p>
-                    Mostrando {notificationsRangeStart}-{notificationsRangeEnd} de {notificationsTotal} notificaciones
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => goToNotificationPage(notificationsPage - 1)}
-                      disabled={notificationsLoading || notificationsPage <= 1}
-                      className="rounded-md border border-slate-600 px-3 py-1.5 text-xs text-slate-100 hover:border-amber-400 disabled:opacity-50"
-                    >
-                      Anterior
-                    </button>
-                    <span className="min-w-[110px] text-center text-[11px] text-slate-400">
-                      Pagina {notificationsPage} de {notificationsTotalPages}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => goToNotificationPage(notificationsPage + 1)}
-                      disabled={notificationsLoading || notificationsPage >= notificationsTotalPages}
-                      className="rounded-md border border-slate-600 px-3 py-1.5 text-xs text-slate-100 hover:border-amber-400 disabled:opacity-50"
-                    >
-                      Siguiente
-                    </button>
-                  </div>
-                </div>
               </>
             ) : (
               <p className="text-sm text-slate-400">
                 {notificationsSearch.trim().length
                   ? "No hay notificaciones que coincidan con la busqueda."
-                  : "Sin eventos registrados."}
+                  : "Sin eventos recientes."}
               </p>
             )}
           </div>

@@ -15,7 +15,6 @@ const YEAR_TO_KEYS = ["ano_hasta", "anoHasta", "anio_hasta", "anioHasta"];
 const YEAR_KEYS = ["ano", "anio", "year"];
 const LOCATION_KEYS = ["ubicacion", "location", "locacion"];
 const DEFAULT_PAGE_SIZE = 30;
-const MAX_PAGE_SIZE = 100;
 
 const extractMlItemId = (value: unknown) => {
   if (typeof value !== "string") return null;
@@ -82,21 +81,17 @@ function buildMessage(params: {
   return `${pieceLabel} ${verb}`;
 }
 
-const parsePagination = (searchParams: URLSearchParams) => {
+const parsePageSize = (searchParams: URLSearchParams) => {
   const legacyLimit = Number.parseInt(searchParams.get("limit") ?? "", 10);
-  const pageParam = Number.parseInt(searchParams.get("page") ?? "1", 10);
   const pageSizeParamRaw = searchParams.get("pageSize");
   const pageSizeParam = pageSizeParamRaw ? Number.parseInt(pageSizeParamRaw, 10) : NaN;
 
-  const page = Number.isFinite(pageParam) && pageParam > 0 ? pageParam : 1;
   const inferredPageSize = Number.isFinite(pageSizeParam) && pageSizeParam > 0
     ? pageSizeParam
     : Number.isFinite(legacyLimit) && legacyLimit > 0
       ? legacyLimit
       : DEFAULT_PAGE_SIZE;
-  const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, inferredPageSize));
-
-  return { page, pageSize };
+  return Math.min(100, Math.max(1, inferredPageSize));
 };
 
 export async function GET(req: Request) {
@@ -106,7 +101,7 @@ export async function GET(req: Request) {
   }
 
   const { searchParams } = new URL(req.url);
-  const { page, pageSize } = parsePagination(searchParams);
+  const pageSize = parsePageSize(searchParams);
   const searchTermRaw = (searchParams.get("search") ?? "").trim();
   const searchTerm = searchTermRaw.toLowerCase();
 
@@ -115,7 +110,8 @@ export async function GET(req: Request) {
       userId: session.user.id,
       action: { in: SUPPORTED_ACTIONS }
     },
-    orderBy: { createdAt: "desc" }
+    orderBy: { createdAt: "desc" },
+    ...(searchTerm ? {} : { take: pageSize })
   });
 
   const mlItemIds = new Set<string>();
@@ -230,15 +226,13 @@ export async function GET(req: Request) {
       })
     : notifications;
 
-  const total = filteredNotifications.length;
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const safePage = Math.min(page, totalPages);
-  const start = (safePage - 1) * pageSize;
-  const pagedNotifications = filteredNotifications.slice(start, start + pageSize);
+  const limitedNotifications = filteredNotifications.slice(0, pageSize);
+  const total = searchTerm ? filteredNotifications.length : limitedNotifications.length;
+  const totalPages = searchTerm ? Math.max(1, Math.ceil(total / pageSize)) : 1;
 
   return NextResponse.json({
-    notifications: pagedNotifications,
-    page: safePage,
+    notifications: limitedNotifications,
+    page: 1,
     pageSize,
     total,
     totalPages,
