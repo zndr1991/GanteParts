@@ -363,6 +363,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [form, setForm] = useState({
     skuInternal: "",
+    mlItemId: "",
     estatusInterno: "",
     stock: "",
     pieza: "",
@@ -1479,6 +1480,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
       const payload = {
         skuInternal: toUpper(form.skuInternal) ?? "",
+        mlItemId: toUpper(form.mlItemId) ?? undefined,
         status: "active",
         price: form.price ? Number(form.price) : undefined,
         stock: form.stock ? Number(form.stock) : undefined,
@@ -1495,6 +1497,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       }
       setForm({
         skuInternal: "",
+        mlItemId: "",
         estatusInterno: "",
         stock: "",
         pieza: "",
@@ -2536,6 +2539,12 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
               value={form.skuInternal}
               onChange={(e) => setForm((f) => ({ ...f, skuInternal: e.target.value.toUpperCase() }))}
               required
+            />
+            <input
+              className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+              placeholder="Codigo ML"
+              value={form.mlItemId}
+              onChange={(e) => setForm((f) => ({ ...f, mlItemId: e.target.value.toUpperCase() }))}
             />
             <select
               className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
