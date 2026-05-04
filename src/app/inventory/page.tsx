@@ -24,7 +24,7 @@ export default async function InventoryPage() {
 
   const role = (session.user.role ?? "").toLowerCase();
   const ownerId = role === "viewer" ? session.user.id : null;
-  const { items, total } = await getInventorySnapshot(ownerId, INVENTORY_FULL_PAGE_SIZE);
+  const { items, total, statusTotals } = await getInventorySnapshot(ownerId, INVENTORY_FULL_PAGE_SIZE);
   const plainItems = items as InventoryClientItem[];
   const initialPageSize = plainItems.length || INVENTORY_FULL_PAGE_SIZE;
 
@@ -32,7 +32,8 @@ export default async function InventoryPage() {
     items: plainItems,
     page: 1,
     pageSize: initialPageSize,
-    total
+    total,
+    statusTotals
   };
 
   return (

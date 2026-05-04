@@ -41,6 +41,7 @@ type InventoryPageResponse = {
   pageSize: number;
   total: number;
   totalPages?: number;
+  statusTotals?: Record<string, number>;
 };
 
 export type InventoryClientItem = Item;
@@ -103,6 +104,23 @@ const PHOTO_QUALITY = 0.8; // calidad JPEG al recomprimir
 const drawingColors = ["#f87171", "#facc15", "#4ade80", "#38bdf8", "#f472b6", "#ffffff"];
 
 const makePhotoKey = (file: File) => `${file.name}-${file.size}-${file.lastModified}`;
+
+const normalizeStatusLabel = (value: unknown) => {
+  const raw = (value ?? "").toString().trim().toUpperCase();
+  return raw.length ? raw : "SIN ESTATUS";
+};
+
+const normalizeStatusTotals = (value: unknown): Record<string, number> => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const normalized: Record<string, number> = {};
+  Object.entries(value as Record<string, unknown>).forEach(([label, count]) => {
+    const normalizedLabel = normalizeStatusLabel(label);
+    const parsedCount = Number(count);
+    if (!Number.isFinite(parsedCount) || parsedCount <= 0) return;
+    normalized[normalizedLabel] = Math.round(parsedCount);
+  });
+  return normalized;
+};
 
 const readFileAsDataUrl = (file: File) =>
   new Promise<string>((resolve, reject) => {
@@ -384,6 +402,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const pageSizeRef = useRef(Math.max(1, initialPage.pageSize || INVENTORY_PAGE_SIZE));
   const [currentPage, setCurrentPage] = useState(Math.max(1, initialPage.page || 1));
   const [totalItems, setTotalItems] = useState(initialPage.total);
+  const [statusTotals, setStatusTotals] = useState<Record<string, number>>(
+    normalizeStatusTotals(initialPage.statusTotals)
+  );
   const [totalPages, setTotalPages] = useState(
     Math.max(1, initialPage.totalPages ?? Math.ceil(initialPage.total / Math.max(1, initialPage.pageSize || INVENTORY_PAGE_SIZE)))
   );
@@ -554,6 +575,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         const nextPageSize = typeof data.pageSize === "number" && data.pageSize > 0 ? data.pageSize : pageSizeRef.current;
         pageSizeRef.current = nextPageSize;
         const nextTotal = typeof data.total === "number" && data.total >= 0 ? data.total : incomingWithLocal.length;
+        const nextStatusTotals = normalizeStatusTotals(data.statusTotals);
         const nextTotalPages =
           typeof data.totalPages === "number" && data.totalPages > 0
             ? data.totalPages
@@ -577,6 +599,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           return incomingWithLocal.map((item) => (updatingSet.has(item.id) ? currentMap.get(item.id) ?? item : item));
         });
         setTotalItems(nextTotal);
+        setStatusTotals(nextStatusTotals);
         setTotalPages(nextTotalPages);
         setCurrentPage(normalizedPage);
 
@@ -1968,19 +1991,20 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   }, [searchFilteredItems, normalizedStatusFilter, sortConfig, getItemPieceName, getItemYearLabel]);
 
   const statusCounters = useMemo(() => {
-    const counts: Record<string, number> = {};
+    const localCounts: Record<string, number> = {};
     items.forEach((item) => {
-      const raw = (item.extraData?.estatus_interno ?? "").toString().trim();
-      const key = raw.length ? raw.toUpperCase() : "SIN ESTATUS";
-      counts[key] = (counts[key] ?? 0) + 1;
+      const key = normalizeStatusLabel(item.extraData?.estatus_interno);
+      localCounts[key] = (localCounts[key] ?? 0) + 1;
     });
-    return Object.entries(counts).sort((a, b) => {
+
+    const source = Object.keys(statusTotals).length ? statusTotals : localCounts;
+    return Object.entries(source).sort((a, b) => {
       if (a[1] === b[1]) {
         return a[0].localeCompare(b[0]);
       }
       return b[1] - a[1];
     });
-  }, [items]);
+  }, [items, statusTotals]);
 
   
 

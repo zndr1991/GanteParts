@@ -70,24 +70,53 @@ const parsePagination = (searchParams: URLSearchParams) => {
   return { page, pageSize, skip };
 };
 
+type StatusCountRow = {
+  label: string | null;
+  count: number | bigint | string;
+};
+
+const getStatusTotals = async (ownerId: string | null) => {
+  const whereSql = ownerId ? Prisma.sql`WHERE "ownerId" = ${ownerId}` : Prisma.empty;
+  const rows = await prisma.$queryRaw<StatusCountRow[]>(Prisma.sql`
+    SELECT
+      COALESCE(NULLIF(UPPER(TRIM("extraData"->>'estatus_interno')), ''), 'SIN ESTATUS') AS label,
+      COUNT(*) AS count
+    FROM "InventoryItem"
+    ${whereSql}
+    GROUP BY 1
+  `);
+
+  const totals: Record<string, number> = {};
+  rows.forEach((row) => {
+    const key = (row.label ?? "").toString().trim().toUpperCase() || "SIN ESTATUS";
+    const parsedCount = Number(row.count ?? 0);
+    if (!Number.isFinite(parsedCount) || parsedCount <= 0) return;
+    totals[key] = Math.round(parsedCount);
+  });
+
+  return totals;
+};
+
 export async function GET(req: Request) {
   const session = await auth();
   if (!session?.user?.id) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
   const role = (session.user.role ?? "").toLowerCase();
-  const where = role === "viewer" ? { ownerId: session.user.id } : undefined;
+  const ownerId = role === "viewer" ? session.user.id : null;
+  const where = ownerId ? { ownerId } : undefined;
 
   const { searchParams } = new URL(req.url);
   const { page, pageSize, skip } = parsePagination(searchParams);
 
-  const [items, total] = await Promise.all([
+  const [items, total, statusTotals] = await Promise.all([
     prisma.inventoryItem.findMany({
       where,
       orderBy: { updatedAt: "desc" },
       skip,
       take: pageSize
     }),
-    prisma.inventoryItem.count({ where })
+    prisma.inventoryItem.count({ where }),
+    getStatusTotals(ownerId)
   ]);
 
   const serialized = items.map((item) => serializeInventoryItem(item));
@@ -98,6 +127,7 @@ export async function GET(req: Request) {
     pageSize,
     total,
     totalPages,
+    statusTotals,
     items: serialized
   });
 }
