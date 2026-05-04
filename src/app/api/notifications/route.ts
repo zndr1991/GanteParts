@@ -7,6 +7,13 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 
 const SUPPORTED_ACTIONS = ["ml:webhook"];
+const PIECE_KEYS = ["pieza", "descripcion", "descripcion_local", "descripcion_ml", "title", "nombre"];
+const BRAND_KEYS = ["marca", "brand"];
+const VEHICLE_KEYS = ["coche", "vehiculo", "modelo"];
+const YEAR_FROM_KEYS = ["ano_desde", "anoDesde", "anio_desde", "anioDesde"];
+const YEAR_TO_KEYS = ["ano_hasta", "anoHasta", "anio_hasta", "anioHasta"];
+const YEAR_KEYS = ["ano", "anio", "year"];
+const LOCATION_KEYS = ["ubicacion", "location", "locacion"];
 
 const extractMlItemId = (value: unknown) => {
   if (typeof value !== "string") return null;
@@ -19,22 +26,48 @@ const toExtraData = (value: unknown) => {
   return value as Record<string, any>;
 };
 
+const trimOrNull = (value: unknown) => {
+  if (value === null || value === undefined) return null;
+  const normalized = String(value).trim();
+  return normalized.length ? normalized : null;
+};
+
+const readExtraValue = (extraData: Record<string, any>, keys: string[]) => {
+  for (const key of keys) {
+    const value = trimOrNull(extraData[key]);
+    if (value) return value;
+  }
+  return null;
+};
+
+const buildYearLabel = (extraData: Record<string, any>) => {
+  const yearFrom = readExtraValue(extraData, YEAR_FROM_KEYS);
+  const yearTo = readExtraValue(extraData, YEAR_TO_KEYS);
+  if (yearFrom || yearTo) {
+    if (yearFrom && yearTo && yearFrom !== yearTo) {
+      return `${yearFrom}-${yearTo}`;
+    }
+    return yearFrom ?? yearTo;
+  }
+  return readExtraValue(extraData, YEAR_KEYS);
+};
+
 function buildMessage(params: {
-  itemId: string | null;
   status: string | null;
   success: boolean;
   error: string | null;
+  piece: string | null;
 }) {
-  const { itemId, status, success, error } = params;
-  const displayId = itemId ?? "publicacion";
+  const { status, success, error, piece } = params;
+  const pieceLabel = piece ? `la pieza ${piece}` : "la pieza";
   if (error) {
-    return `No se pudo sincronizar ${displayId}: ${error}`;
+    return `No se pudo sincronizar ${pieceLabel}: ${error}`;
   }
   if (!success) {
-    return `${displayId} no pudo actualizarse en la base interna`;
+    return `${pieceLabel} no pudo actualizarse en la base interna`;
   }
   if (!status) {
-    return `${displayId} se sincronizo`; 
+    return `${pieceLabel} se sincronizo`;
   }
   const verb =
     status === "active"
@@ -44,7 +77,7 @@ function buildMessage(params: {
         : status === "inactive"
           ? "se inactivo"
           : "cambio de estado";
-  return `${displayId} ${verb}`;
+  return `${pieceLabel} ${verb}`;
 }
 
 export async function GET(req: Request) {
@@ -130,8 +163,14 @@ export async function GET(req: Request) {
       (typeof log.itemId === "string" ? inventoryById.get(log.itemId) : undefined) ??
       (normalizedMlItemId ? inventoryByMlItemId.get(normalizedMlItemId) : undefined);
     const extraData = toExtraData(linkedItem?.extraData);
-    const rawPiece = (extraData.pieza ?? "").toString().trim();
-    const piece = rawPiece.length ? rawPiece : linkedItem?.title ?? null;
+    const piece =
+      readExtraValue(extraData, PIECE_KEYS) ??
+      trimOrNull(linkedItem?.title) ??
+      trimOrNull(linkedItem?.skuInternal);
+    const marca = readExtraValue(extraData, BRAND_KEYS);
+    const coche = readExtraValue(extraData, VEHICLE_KEYS);
+    const ano = buildYearLabel(extraData);
+    const ubicacion = readExtraValue(extraData, LOCATION_KEYS);
     const photos = sanitizePhotosArray(extraData.photos, 1);
     const photoPreview = photos[0] ?? null;
     const skuInternal = linkedItem?.skuInternal ?? null;
@@ -143,9 +182,13 @@ export async function GET(req: Request) {
       status,
       success,
       piece,
+      marca,
+      coche,
+      ano,
+      ubicacion,
       skuInternal,
       photoPreview,
-      message: buildMessage({ itemId: derivedItemId, status, success, error })
+      message: buildMessage({ status, success, error, piece })
     };
   });
 

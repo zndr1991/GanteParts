@@ -32,6 +32,10 @@ type NotificationItem = {
   status?: string | null;
   success: boolean;
   piece?: string | null;
+  marca?: string | null;
+  coche?: string | null;
+  ano?: string | null;
+  ubicacion?: string | null;
   skuInternal?: string | null;
   photoPreview?: string | null;
 };
@@ -2398,6 +2402,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                         <p className="text-sm">{entry.message}</p>
                         <p className="text-xs text-slate-300">Pieza: {entry.piece || "-"}</p>
                         <p className="text-xs text-slate-300">SKU: {entry.skuInternal || "-"}</p>
+                        <p className="text-xs text-slate-300">Marca: {entry.marca || "-"}</p>
+                        <p className="text-xs text-slate-300">Coche: {entry.coche || "-"}</p>
+                        <p className="text-xs text-slate-300">Ano: {entry.ano || "-"}</p>
+                        <p className="text-xs text-slate-300">Ubicacion: {entry.ubicacion || "-"}</p>
                         <p className="text-[11px] text-slate-500">{formatRelativeTime(entry.createdAt)}</p>
                       </div>
                     </div>
