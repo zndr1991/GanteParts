@@ -376,14 +376,13 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastNotificationIdRef = useRef<string | null>(null);
   const isMountedRef = useRef(true);
+  const autoLoadAttemptedRef = useRef(false);
   const localEstatusInternoRef = useRef(
     new Map<string, { value: string; updatedAt: number; prestadoVendidoA?: string | null }>()
   );
   const [isMobile, setIsMobile] = useState(false);
   const pageSizeRef = useRef(initialPage.pageSize);
   const [totalItems, setTotalItems] = useState(initialPage.total);
-  const [listLoading, setListLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [loadingAll, setLoadingAll] = useState(false);
   const [sectionVisibility, setSectionVisibility] = useState<Record<SectionKey, boolean>>({
     notifications: true,
@@ -509,24 +508,28 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     }
   };
 
-  const fetchPage = useCallback(
-    async (page: number, options?: { append?: boolean }) => {
-      const append = Boolean(options?.append);
-      if (append) {
-        setLoadingMore(true);
-      } else {
-        setListLoading(true);
-      }
-      try {
+  const loadAllItems = useCallback(async () => {
+    if (loadingAll) return;
+    setLoadingAll(true);
+    setMessage(null);
+    try {
+      let page = 1;
+      let total = 0;
+      let pageSize = Math.max(1, pageSizeRef.current || 60);
+      const collected: Item[] = [];
+      const seen = new Set<string>();
+
+      while (true) {
         const params = new URLSearchParams({
           page: page.toString(),
-          pageSize: pageSizeRef.current.toString()
+          pageSize: pageSize.toString()
         });
         const res = await fetch(`/api/inventory?${params.toString()}`, { cache: "no-store" });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          throw new Error(data.error || "No se pudo obtener el inventario");
+          throw new Error(data.error || "No se pudo cargar el inventario completo");
         }
+
         const incoming: Item[] = Array.isArray(data.items) ? data.items : [];
         const now = Date.now();
         const incomingWithLocal = incoming.map((item) => {
@@ -541,97 +544,68 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
             localEstatusInternoRef.current.delete(item.id);
             return item;
           }
-          const nextExtra: Record<string, any> = { ...(item.extraData ?? {}), estatus_interno: local.value || undefined };
+          const nextExtra: Record<string, any> = {
+            ...(item.extraData ?? {}),
+            estatus_interno: local.value || undefined
+          };
           if (local.prestadoVendidoA !== undefined) {
             nextExtra.prestado_vendido_a = local.prestadoVendidoA || undefined;
           }
           return { ...item, extraData: nextExtra };
         });
+
         if (typeof data.pageSize === "number" && data.pageSize > 0) {
+          pageSize = data.pageSize;
           pageSizeRef.current = data.pageSize;
         }
-        setTotalItems(typeof data.total === "number" ? data.total : incomingWithLocal.length);
-        setItems((current) => {
-          if (!append) {
-            if (!updatingIds.length) {
-              return incomingWithLocal;
-            }
-            const updatingSet = new Set(updatingIds);
-            const currentMap = new Map(current.map((item) => [item.id, item]));
-            return incomingWithLocal.map((item) =>
-              updatingSet.has(item.id) ? currentMap.get(item.id) ?? item : item
-            );
-          }
-          const existingIds = new Set(current.map((item) => item.id));
-          const merged = [...current];
-          incomingWithLocal.forEach((item) => {
-            if (!existingIds.has(item.id)) {
-              merged.push(item);
-              existingIds.add(item.id);
-            }
-          });
-          return merged;
+        if (typeof data.total === "number" && data.total >= 0) {
+          total = data.total;
+        }
+
+        incomingWithLocal.forEach((item) => {
+          if (seen.has(item.id)) return;
+          seen.add(item.id);
+          collected.push(item);
         });
-        if (!append) {
-          setSelectedIds([]);
-          setFocusedRowInfo(null);
-        }
-        return true;
-      } catch (err: any) {
-        setMessage(err?.message || "No se pudo obtener el inventario");
-        return false;
-      } finally {
-        if (append) {
-          setLoadingMore(false);
-        } else {
-          setListLoading(false);
-        }
+
+        if (!incomingWithLocal.length) break;
+        if (total > 0 && collected.length >= total) break;
+        if (incomingWithLocal.length < pageSize) break;
+
+        page += 1;
       }
-    },
-    [setMessage, updatingIds]
-  );
 
-  const refresh = useCallback(async () => {
-    if (isManualOnly) return;
-    await fetchPage(1);
-  }, [fetchPage, isManualOnly]);
-
-  const hasMoreItems = items.length < totalItems;
-
-  const loadMore = useCallback(async () => {
-    if (!hasMoreItems || loadingMore) return;
-    const pageSize = pageSizeRef.current || 1;
-    const nextPage = Math.floor(items.length / pageSize) + 1;
-    await fetchPage(nextPage, { append: true });
-  }, [fetchPage, hasMoreItems, items.length, loadingMore]);
-
-  const loadAllItems = useCallback(async () => {
-    if (loadingAll) return;
-    setLoadingAll(true);
-    setMessage(null);
-    try {
-      const res = await fetch("/api/inventory/all", { cache: "no-store" });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data.error || "No se pudo traer todo el inventario");
-      }
-      const list: Item[] = Array.isArray(data.items) ? data.items : [];
-      setItems(list);
-      const reportedTotal = typeof data.total === "number" ? data.total : list.length;
-      setTotalItems(reportedTotal);
+      const finalTotal = total || collected.length;
+      setTotalItems(finalTotal);
+      setItems((current) => {
+        if (!updatingIds.length) {
+          return collected;
+        }
+        const updatingSet = new Set(updatingIds);
+        const currentMap = new Map(current.map((item) => [item.id, item]));
+        return collected.map((item) => (updatingSet.has(item.id) ? currentMap.get(item.id) ?? item : item));
+      });
       setSelectedIds([]);
       setFocusedRowInfo(null);
-      pageSizeRef.current = list.length || pageSizeRef.current;
-      if (data.truncated) {
-        const missing = Math.max(0, reportedTotal - list.length);
-        setMessage(`Mostrando ${list.length} registros. Faltan ${missing} por el limite maximo permitido.`);
-      }
     } catch (err: any) {
-      setMessage(err?.message || "No se pudo traer todo el inventario");
+      setMessage(err?.message || "No se pudo cargar el inventario completo");
     } finally {
       setLoadingAll(false);
     }
-  }, [loadingAll, setMessage]);
+  }, [loadingAll, setMessage, updatingIds]);
+
+  const refresh = useCallback(async () => {
+    if (isManualOnly) return;
+    await loadAllItems();
+  }, [isManualOnly, loadAllItems]);
+
+  useEffect(() => {
+    if (isManualOnly) return;
+    if (autoLoadAttemptedRef.current) return;
+    if (items.length >= totalItems) return;
+    autoLoadAttemptedRef.current = true;
+    void loadAllItems();
+  }, [isManualOnly, items.length, totalItems, loadAllItems]);
 
   const deleteItems = useCallback(async (ids: string[], password?: string) => {
     if (!ids.length) return;
@@ -2626,11 +2600,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
             </div>
           )}
           <p className="text-xs text-slate-400">
-            Mostrando {items.length} de {totalItems} registros
+            {loadingAll
+              ? `Cargando inventario completo (${items.length}/${totalItems})...`
+              : `Mostrando ${items.length} registros`}
           </p>
-          {listLoading && (
-            <p className="text-xs text-amber-300">Actualizando inventario...</p>
-          )}
           <div
             className="mt-4 overflow-auto rounded-2xl border border-slate-800 bg-slate-950/30 shadow-inner shadow-black/40"
             style={{ maxHeight: tableHeaderHeight + tableVisibleRows * tableRowHeight }}
@@ -3075,31 +3048,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
               </table>
             )}
           </div>
-          {hasMoreItems && (
-            <div className="flex flex-col items-center gap-3 pt-4">
-              <div className="flex flex-wrap justify-center gap-2">
-                <button
-                  type="button"
-                  onClick={loadMore}
-                  disabled={loadingMore || listLoading || loadingAll}
-                  className="rounded-md border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:border-amber-400 disabled:opacity-60"
-                >
-                  {loadingMore ? "Cargando..." : "Cargar más"}
-                </button>
-                <button
-                  type="button"
-                  onClick={loadAllItems}
-                  disabled={loadingAll || listLoading}
-                  className="rounded-md border border-amber-400 px-4 py-2 text-sm font-semibold text-amber-200 hover:border-amber-200 disabled:opacity-60"
-                >
-                  {loadingAll ? "Cargando todo..." : "Cargar todo"}
-                </button>
-              </div>
-              <p className="text-center text-[11px] text-slate-500">
-                Presiona &quot;Cargar todo&quot; para traer los {totalItems} registros en una sola vista. Puede tardar si el inventario es grande.
-              </p>
-            </div>
-          )}
         </section>
         </>
         )}
