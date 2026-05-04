@@ -380,6 +380,8 @@ const dedupeNotificationsByAction = (entries: NotificationItem[]) => {
   return result;
 };
 
+const normalizeFacetValue = (value: unknown) => (value ?? "").toString().trim().toUpperCase();
+
 const getStatusBadgeClass = (status?: string | null) => {
   switch ((status ?? "").toLowerCase()) {
     case "active":
@@ -400,6 +402,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [search, setSearch] = useState("");
   const [focusedRowInfo, setFocusedRowInfo] = useState<FocusedInfo | null>(null);
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
+  const [inventoryMarcaFilter, setInventoryMarcaFilter] = useState("");
+  const [inventoryCocheFilter, setInventoryCocheFilter] = useState("");
+  const [inventoryPiezaFilter, setInventoryPiezaFilter] = useState("");
   const [form, setForm] = useState({
     skuInternal: "",
     mlItemId: "",
@@ -2539,14 +2544,138 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   }, [items, normalizedSearch]);
 
   const normalizedStatusFilter = statusFilter?.toUpperCase() ?? null;
+  const statusAndSearchFilteredItems = useMemo(() => {
+    if (!normalizedStatusFilter) return searchFilteredItems;
+    return searchFilteredItems.filter((item) => {
+      const current = (item.extraData?.estatus_interno ?? "").toString().trim().toUpperCase();
+      const label = current.length ? current : "SIN ESTATUS";
+      return label === normalizedStatusFilter;
+    });
+  }, [searchFilteredItems, normalizedStatusFilter]);
+
+  const normalizedInventoryMarcaFilter = inventoryMarcaFilter.trim().toUpperCase();
+  const normalizedInventoryCocheFilter = inventoryCocheFilter.trim().toUpperCase();
+  const normalizedInventoryPiezaFilter = inventoryPiezaFilter.trim().toUpperCase();
+
+  const getInventoryFacetMarca = useCallback((item: Item) => normalizeFacetValue(item.extraData?.marca), []);
+  const getInventoryFacetCoche = useCallback((item: Item) => normalizeFacetValue(item.extraData?.coche), []);
+  const getInventoryFacetPieza = useCallback((item: Item) => {
+    const pieceFromExtra = normalizeFacetValue(item.extraData?.pieza);
+    if (pieceFromExtra.length) return pieceFromExtra;
+    return normalizeFacetValue(item.title);
+  }, []);
+
+  const inventoryMarcaOptions = useMemo(() => {
+    const options = statusAndSearchFilteredItems
+      .filter((item) => {
+        const cocheValue = getInventoryFacetCoche(item);
+        const piezaValue = getInventoryFacetPieza(item);
+        const matchesCoche = !normalizedInventoryCocheFilter || cocheValue === normalizedInventoryCocheFilter;
+        const matchesPieza = !normalizedInventoryPiezaFilter || piezaValue === normalizedInventoryPiezaFilter;
+        return matchesCoche && matchesPieza;
+      })
+      .map(getInventoryFacetMarca)
+      .filter((value) => value.length);
+
+    return Array.from(new Set(options)).sort((a, b) => a.localeCompare(b, "es"));
+  }, [
+    statusAndSearchFilteredItems,
+    normalizedInventoryCocheFilter,
+    normalizedInventoryPiezaFilter,
+    getInventoryFacetMarca,
+    getInventoryFacetCoche,
+    getInventoryFacetPieza
+  ]);
+
+  const inventoryCocheOptions = useMemo(() => {
+    const options = statusAndSearchFilteredItems
+      .filter((item) => {
+        const marcaValue = getInventoryFacetMarca(item);
+        const piezaValue = getInventoryFacetPieza(item);
+        const matchesMarca = !normalizedInventoryMarcaFilter || marcaValue === normalizedInventoryMarcaFilter;
+        const matchesPieza = !normalizedInventoryPiezaFilter || piezaValue === normalizedInventoryPiezaFilter;
+        return matchesMarca && matchesPieza;
+      })
+      .map(getInventoryFacetCoche)
+      .filter((value) => value.length);
+
+    return Array.from(new Set(options)).sort((a, b) => a.localeCompare(b, "es"));
+  }, [
+    statusAndSearchFilteredItems,
+    normalizedInventoryMarcaFilter,
+    normalizedInventoryPiezaFilter,
+    getInventoryFacetMarca,
+    getInventoryFacetCoche,
+    getInventoryFacetPieza
+  ]);
+
+  const inventoryPiezaOptions = useMemo(() => {
+    const options = statusAndSearchFilteredItems
+      .filter((item) => {
+        const marcaValue = getInventoryFacetMarca(item);
+        const cocheValue = getInventoryFacetCoche(item);
+        const matchesMarca = !normalizedInventoryMarcaFilter || marcaValue === normalizedInventoryMarcaFilter;
+        const matchesCoche = !normalizedInventoryCocheFilter || cocheValue === normalizedInventoryCocheFilter;
+        return matchesMarca && matchesCoche;
+      })
+      .map(getInventoryFacetPieza)
+      .filter((value) => value.length);
+
+    return Array.from(new Set(options)).sort((a, b) => a.localeCompare(b, "es"));
+  }, [
+    statusAndSearchFilteredItems,
+    normalizedInventoryMarcaFilter,
+    normalizedInventoryCocheFilter,
+    getInventoryFacetMarca,
+    getInventoryFacetCoche,
+    getInventoryFacetPieza
+  ]);
+
+  useEffect(() => {
+    if (!inventoryMarcaFilter) return;
+    if (!inventoryMarcaOptions.includes(inventoryMarcaFilter)) {
+      setInventoryMarcaFilter("");
+    }
+  }, [inventoryMarcaFilter, inventoryMarcaOptions]);
+
+  useEffect(() => {
+    if (!inventoryCocheFilter) return;
+    if (!inventoryCocheOptions.includes(inventoryCocheFilter)) {
+      setInventoryCocheFilter("");
+    }
+  }, [inventoryCocheFilter, inventoryCocheOptions]);
+
+  useEffect(() => {
+    if (!inventoryPiezaFilter) return;
+    if (!inventoryPiezaOptions.includes(inventoryPiezaFilter)) {
+      setInventoryPiezaFilter("");
+    }
+  }, [inventoryPiezaFilter, inventoryPiezaOptions]);
+
+  const facetedFilteredItems = useMemo(() => {
+    return statusAndSearchFilteredItems.filter((item) => {
+      const marcaValue = getInventoryFacetMarca(item);
+      const cocheValue = getInventoryFacetCoche(item);
+      const piezaValue = getInventoryFacetPieza(item);
+
+      if (normalizedInventoryMarcaFilter && marcaValue !== normalizedInventoryMarcaFilter) return false;
+      if (normalizedInventoryCocheFilter && cocheValue !== normalizedInventoryCocheFilter) return false;
+      if (normalizedInventoryPiezaFilter && piezaValue !== normalizedInventoryPiezaFilter) return false;
+
+      return true;
+    });
+  }, [
+    statusAndSearchFilteredItems,
+    normalizedInventoryMarcaFilter,
+    normalizedInventoryCocheFilter,
+    normalizedInventoryPiezaFilter,
+    getInventoryFacetMarca,
+    getInventoryFacetCoche,
+    getInventoryFacetPieza
+  ]);
+
   const filteredItems = useMemo(() => {
-    const filtered = normalizedStatusFilter
-      ? searchFilteredItems.filter((item) => {
-          const current = (item.extraData?.estatus_interno ?? "").toString().trim().toUpperCase();
-          const label = current.length ? current : "SIN ESTATUS";
-          return label === normalizedStatusFilter;
-        })
-      : searchFilteredItems;
+    const filtered = facetedFilteredItems;
 
     if (!sortConfig) return filtered;
 
@@ -2603,7 +2732,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     });
 
     return sorted;
-  }, [searchFilteredItems, normalizedStatusFilter, sortConfig, getItemPieceName, getItemYearLabel]);
+  }, [facetedFilteredItems, sortConfig, getItemPieceName, getItemYearLabel]);
 
   const statusCounters = useMemo(() => {
     const localCounts: Record<string, number> = {};
@@ -3336,17 +3465,69 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
               <h2 className="text-lg font-semibold">Inventario cargado</h2>
               <p className="text-xs text-slate-400">Selecciona filas para borrar, busca por SKU, titulo o codigo de Mercado Libre.</p>
             </div>
-            <div className="flex flex-wrap gap-2 items-center">
-              <input
-                type="search"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Buscar..."
-                className="w-full sm:w-64 rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm focus:border-amber-400 focus:outline-none"
-              />
-              <span className="text-xs text-slate-400">
-                Mostrando {filteredItems.length} de {items.length}
-              </span>
+            <div className="flex w-full flex-col gap-2 sm:w-auto sm:items-end">
+              <div className="flex w-full flex-wrap items-center gap-2 sm:justify-end">
+                <input
+                  type="search"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Buscar..."
+                  className="w-full sm:w-64 rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm focus:border-amber-400 focus:outline-none"
+                />
+                <span className="text-xs text-slate-400">
+                  Mostrando {filteredItems.length} de {items.length}
+                </span>
+              </div>
+              <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-4">
+                <select
+                  value={inventoryMarcaFilter}
+                  onChange={(event) => setInventoryMarcaFilter(event.target.value)}
+                  className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
+                >
+                  <option value="">Marca (todas)</option>
+                  {inventoryMarcaOptions.map((marca) => (
+                    <option key={marca} value={marca}>
+                      {marca}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={inventoryCocheFilter}
+                  onChange={(event) => setInventoryCocheFilter(event.target.value)}
+                  className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
+                >
+                  <option value="">Coche (todos)</option>
+                  {inventoryCocheOptions.map((coche) => (
+                    <option key={coche} value={coche}>
+                      {coche}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={inventoryPiezaFilter}
+                  onChange={(event) => setInventoryPiezaFilter(event.target.value)}
+                  className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
+                >
+                  <option value="">Pieza (todas)</option>
+                  {inventoryPiezaOptions.map((pieza) => (
+                    <option key={pieza} value={pieza}>
+                      {pieza}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInventoryMarcaFilter("");
+                    setInventoryCocheFilter("");
+                    setInventoryPiezaFilter("");
+                  }}
+                  disabled={!inventoryMarcaFilter && !inventoryCocheFilter && !inventoryPiezaFilter}
+                  className="rounded-md border border-slate-600 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-amber-400 disabled:opacity-50"
+                >
+                  Limpiar filtros
+                </button>
+              </div>
             </div>
           </div>
           <div className="hidden rounded-2xl border border-slate-700 bg-slate-900/50 p-4">
