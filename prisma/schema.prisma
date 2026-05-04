@@ -21,6 +21,18 @@ model User {
   auditLogs   AuditLog[]
   notificationPreference NotificationPreference?
   mercadoLibreAccounts   MercadoLibreAccount[]
+  financeEntries          FinanceEntry[]
+  debts                   Debt[]
+}
+
+enum FinanceEntryType {
+  INCOME
+  EXPENSE
+}
+
+enum DebtMovementType {
+  CHARGE
+  PAYMENT
 }
 
 model Account {
@@ -109,4 +121,47 @@ model MercadoLibreAccount {
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, mlUserId])
+}
+
+model FinanceEntry {
+  id        String          @id @default(cuid())
+  ownerId   String
+  owner     User            @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  type      FinanceEntryType
+  entryDate DateTime
+  concept   String
+  code      String?
+  amount    Decimal         @db.Decimal(14, 2)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  @@index([entryDate])
+  @@index([ownerId, entryDate])
+}
+
+model Debt {
+  id           String         @id @default(cuid())
+  ownerId      String
+  owner        User           @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  creditorName String
+  concept      String
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  movements    DebtMovement[]
+
+  @@index([ownerId, updatedAt])
+}
+
+model DebtMovement {
+  id           String           @id @default(cuid())
+  debtId       String
+  debt         Debt             @relation(fields: [debtId], references: [id], onDelete: Cascade)
+  type         DebtMovementType
+  concept      String
+  amount       Decimal          @db.Decimal(14, 2)
+  movementDate DateTime
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  @@index([debtId, movementDate])
 }

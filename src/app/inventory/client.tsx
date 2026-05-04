@@ -2855,6 +2855,14 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 >
                   Volver al menú
                 </Link>
+                {!isManualOnly && (
+                  <Link
+                    href="/finanzas"
+                    className="rounded-md border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-center text-sm font-semibold text-amber-200 hover:bg-amber-500/20"
+                  >
+                    Control de gastos
+                  </Link>
+                )}
                 {!isManualOnly && canCreateManual && (
                   <Link
                     href="/inventory/manual"

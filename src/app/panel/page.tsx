@@ -33,6 +33,13 @@ const shortcuts: Shortcut[] = [
     description: "Comparte tu catálogo externo sin exponer datos internos.",
     accent: "from-cyan-500/15 to-cyan-500/5",
     border: "border-cyan-400/40"
+  },
+  {
+    href: "/finanzas",
+    title: "Control de gastos",
+    description: "Registra ingresos, egresos semanales y administra deudas con abonos.",
+    accent: "from-amber-500/20 to-amber-500/5",
+    border: "border-amber-400/40"
   }
 ];
 
@@ -74,6 +81,12 @@ export default async function PanelPage() {
               className="rounded-full border border-cyan-400/50 px-4 py-2 text-sm font-semibold text-cyan-200 hover:bg-cyan-500/10"
             >
               Ver inventario público
+            </Link>
+            <Link
+              href="/finanzas"
+              className="rounded-full border border-amber-400/50 px-4 py-2 text-sm font-semibold text-amber-200 hover:bg-amber-500/10"
+            >
+              Abrir finanzas
             </Link>
             <a
               href="/api/auth/signout"
