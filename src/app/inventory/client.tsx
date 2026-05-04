@@ -102,6 +102,9 @@ const INVENTORY_PAGE_SIZE = 100;
 const MAX_PHOTO_DIMENSION = 1280; // ancho/alto maximo al comprimir
 const PHOTO_QUALITY = 0.8; // calidad JPEG al recomprimir
 const drawingColors = ["#f87171", "#facc15", "#4ade80", "#38bdf8", "#f472b6", "#ffffff"];
+const THUMBNAILS_ENABLED = true;
+const THUMBNAIL_PREFETCH_LIMIT = 40; // evita descargas masivas por pagina
+const THUMBNAIL_FETCH_GAP_MS = 120;
 
 const makePhotoKey = (file: File) => `${file.name}-${file.size}-${file.lastModified}`;
 
@@ -391,6 +394,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [photoModalError, setPhotoModalError] = useState<string | null>(null);
   const [photoModalLoading, setPhotoModalLoading] = useState(false);
   const [modalActiveIndex, setModalActiveIndex] = useState(0);
+  const [thumbnailCache, setThumbnailCache] = useState<Record<string, string | null>>({});
+  const [thumbnailLoadingIds, setThumbnailLoadingIds] = useState<Record<string, boolean>>({});
+  const [thumbnailErrors, setThumbnailErrors] = useState<Record<string, string | null>>({});
   const [mlAction, setMlAction] = useState<null | "pause" | "activate">(null);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastNotificationIdRef = useRef<string | null>(null);
@@ -422,6 +428,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const canCreateManual = canEditInventory || normalizedRole === "operator" || normalizedRole === "uploader";
   const canImportInventory = canEditInventory;
   const canManageMercadoLibre = canEditInventory;
+  const thumbnailsActive = THUMBNAILS_ENABLED;
 
   useEffect(() => {
     const handleResize = () => {
@@ -1084,6 +1091,37 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     }
   }, []);
 
+  const ensureThumbnail = useCallback(
+    async (itemId: string) => {
+      if (thumbnailCache[itemId] !== undefined || thumbnailLoadingIds[itemId]) return;
+      setThumbnailLoadingIds((prev) => ({ ...prev, [itemId]: true }));
+      try {
+        const res = await fetch(`/api/inventory/${itemId}/photos?limit=1`, { cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.error || "No se pudo obtener la miniatura");
+        }
+        const preview = Array.isArray(data.photos) ? data.photos[0] ?? null : null;
+        setThumbnailCache((prev) => ({ ...prev, [itemId]: preview }));
+        setThumbnailErrors((prev) => {
+          const next = { ...prev };
+          delete next[itemId];
+          return next;
+        });
+      } catch (err: any) {
+        setThumbnailErrors((prev) => ({ ...prev, [itemId]: err?.message || "No se pudo cargar" }));
+        setThumbnailCache((prev) => ({ ...prev, [itemId]: null }));
+      } finally {
+        setThumbnailLoadingIds((prev) => {
+          const next = { ...prev };
+          delete next[itemId];
+          return next;
+        });
+      }
+    },
+    [thumbnailCache, thumbnailLoadingIds]
+  );
+
   const handleModalFileSelection = async (fileList: FileList | null) => {
     if (!photoModal || !fileList?.length) return;
     setPhotoModalError(null);
@@ -1154,6 +1192,12 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           item.id === photoModal.id ? { ...item, photoCount: photosToSave.length } : item
         )
       );
+      setThumbnailCache((prev) => ({ ...prev, [photoModal.id]: photosToSave[0] ?? null }));
+      setThumbnailErrors((prev) => {
+        const next = { ...prev };
+        delete next[photoModal.id];
+        return next;
+      });
       closePhotoModal();
       setMessage("Fotos actualizadas");
     } catch (err: any) {
@@ -2006,6 +2050,34 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     });
   }, [items, statusTotals]);
 
+  useEffect(() => {
+    if (!thumbnailsActive) return;
+    const queue = filteredItems
+      .filter((item) => (item.photoCount ?? 0) > 0)
+      .slice(0, THUMBNAIL_PREFETCH_LIMIT)
+      .map((item) => item.id)
+      .filter((id) => thumbnailCache[id] === undefined && !thumbnailLoadingIds[id]);
+
+    if (!queue.length) return;
+
+    let cancelled = false;
+
+    const processQueue = async () => {
+      for (const id of queue) {
+        if (cancelled) break;
+        await ensureThumbnail(id);
+        if (cancelled) break;
+        await new Promise((resolve) => setTimeout(resolve, THUMBNAIL_FETCH_GAP_MS));
+      }
+    };
+
+    processQueue();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [thumbnailsActive, filteredItems, ensureThumbnail, thumbnailCache, thumbnailLoadingIds]);
+
   
 
   return (
@@ -2774,6 +2846,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                       : "";
                     const photosCount = typeof item.photoCount === "number" ? item.photoCount : 0;
                     const mlUrl = item.mlItemId ? `https://articulo.mercadolibre.com.mx/${item.mlItemId}` : null;
+                    const previewEnabled = thumbnailsActive && photosCount > 0;
+                    const previewSrc = previewEnabled ? thumbnailCache[item.id] : null;
+                    const previewLoading = previewEnabled && Boolean(thumbnailLoadingIds[item.id]);
+                    const previewError = previewEnabled ? thumbnailErrors[item.id] : null;
                     return (
                       <tr
                         key={item.id}
@@ -2841,16 +2917,43 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                           <div className="flex items-center gap-3">
                             <button
                               type="button"
-                              className="h-12 w-12 overflow-hidden rounded-xl border border-slate-800 bg-slate-950/60 text-[10px] text-slate-500"
+                              className={`relative flex h-16 w-16 items-center justify-center overflow-hidden rounded-xl border border-slate-800 bg-slate-950/60 text-[10px] text-slate-500 transition ${
+                                canEditInventory ? "hover:border-amber-300" : "opacity-60"
+                              }`}
                               onClick={(event) => {
                                 event.stopPropagation();
                                 if (canEditInventory) {
                                   openPhotoModal(item);
                                 }
                               }}
+                              onMouseEnter={() => {
+                                if (previewEnabled) ensureThumbnail(item.id);
+                              }}
+                              onFocus={() => {
+                                if (previewEnabled) ensureThumbnail(item.id);
+                              }}
                               disabled={!canEditInventory}
+                              aria-label={photosCount ? "Ver fotos" : "Sin fotos"}
                             >
-                              {photosCount ? "Ver" : "Sin"}
+                              {previewEnabled ? (
+                                previewSrc ? (
+                                  <img
+                                    src={previewSrc}
+                                    alt={`Miniatura ${pieceName}`}
+                                    className="h-full w-full object-cover"
+                                    loading="lazy"
+                                    decoding="async"
+                                  />
+                                ) : previewLoading ? (
+                                  <span className="text-amber-200">Cargando...</span>
+                                ) : previewError ? (
+                                  <span className="text-rose-200">Error</span>
+                                ) : (
+                                  <span className="text-slate-400">Pendiente</span>
+                                )
+                              ) : (
+                                <span className="text-slate-400">{photosCount ? "Ver" : "Sin"}</span>
+                              )}
                             </button>
                             <div className="text-xs text-slate-400">
                               {photosCount ? `${photosCount} fotos` : "Sin fotos"}
