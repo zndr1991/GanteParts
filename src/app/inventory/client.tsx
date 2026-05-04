@@ -31,6 +31,9 @@ type NotificationItem = {
   itemId?: string | null;
   status?: string | null;
   success: boolean;
+  piece?: string | null;
+  skuInternal?: string | null;
+  photoPreview?: string | null;
 };
 
 type SectionKey = "notifications" | "manual" | "import";
@@ -2190,9 +2193,28 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
               <ul className="divide-y divide-slate-700 text-sm text-slate-100">
                 {notifications.slice(0, 6).map((entry) => (
                   <li key={entry.id} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <p className="text-sm">{entry.message}</p>
-                      <p className="text-[11px] text-slate-500">{formatRelativeTime(entry.createdAt)}</p>
+                    <div className="flex items-center gap-3">
+                      <div className="h-14 w-14 overflow-hidden rounded-xl border border-slate-700 bg-slate-950/70">
+                        {entry.photoPreview ? (
+                          <img
+                            src={entry.photoPreview}
+                            alt={entry.piece ? `Miniatura ${entry.piece}` : "Miniatura de pieza"}
+                            className="h-full w-full object-cover"
+                            loading="lazy"
+                            decoding="async"
+                          />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-500">
+                            Sin foto
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        <p className="text-sm">{entry.message}</p>
+                        <p className="text-xs text-slate-300">Pieza: {entry.piece || "-"}</p>
+                        <p className="text-xs text-slate-300">SKU: {entry.skuInternal || "-"}</p>
+                        <p className="text-[11px] text-slate-500">{formatRelativeTime(entry.createdAt)}</p>
+                      </div>
                     </div>
                     <div className="flex flex-col items-start gap-1 text-[11px] text-slate-400 sm:items-end">
                       {entry.itemId && <span className="font-mono tracking-wide">{entry.itemId}</span>}
