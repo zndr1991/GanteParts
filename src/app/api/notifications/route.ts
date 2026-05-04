@@ -15,6 +15,7 @@ const YEAR_TO_KEYS = ["ano_hasta", "anoHasta", "anio_hasta", "anioHasta"];
 const YEAR_KEYS = ["ano", "anio", "year"];
 const LOCATION_KEYS = ["ubicacion", "location", "locacion"];
 const DEFAULT_PAGE_SIZE = 10;
+const NON_SEARCH_BATCH_SIZE = 120;
 
 const extractMlItemId = (value: unknown) => {
   if (typeof value !== "string") return null;
@@ -98,6 +99,34 @@ const parsePagination = (searchParams: URLSearchParams) => {
   return { page, pageSize };
 };
 
+const buildLogActionKey = (log: { itemId: string | null; metadata: unknown }) => {
+  const metadata = toExtraData(log.metadata);
+  const metadataItemId = trimOrNull(metadata.itemId);
+  const payloadResource = trimOrNull(metadata.payload?.resource);
+  const normalizedMlItemId =
+    extractMlItemId(metadataItemId) ?? extractMlItemId(payloadResource) ?? extractMlItemId(log.itemId);
+  const normalizedItemId = (
+    normalizedMlItemId ?? metadataItemId ?? payloadResource ?? trimOrNull(log.itemId) ?? "sin-item"
+  ).toUpperCase();
+  const status = (trimOrNull(metadata.mappedStatus) ?? trimOrNull(metadata.status) ?? "sin-status").toLowerCase();
+  const updated = typeof metadata.updated === "number" ? metadata.updated : null;
+  const error = trimOrNull(metadata.error);
+  const success = error ? false : updated === null ? true : updated > 0;
+  return `${normalizedItemId}||${status}||${success ? "1" : "0"}`;
+};
+
+const dedupeLogsByAction = <T extends { itemId: string | null; metadata: unknown }>(logs: T[]) => {
+  const seen = new Set<string>();
+  const unique: T[] = [];
+  logs.forEach((log) => {
+    const key = buildLogActionKey(log);
+    if (seen.has(key)) return;
+    seen.add(key);
+    unique.push(log);
+  });
+  return unique;
+};
+
 export async function GET(req: Request) {
   const session = await auth();
   if (!session?.user?.id) {
@@ -110,21 +139,59 @@ export async function GET(req: Request) {
   const searchTerm = searchTermRaw.toLowerCase();
   const hasSearch = searchTerm.length > 0;
   const skip = (page - 1) * pageSize;
-  const queryTake = hasSearch ? undefined : pageSize + 1;
-  const querySkip = hasSearch ? undefined : skip;
 
-  const logs = await prisma.auditLog.findMany({
+  const auditWhere = {
     where: {
       userId: session.user.id,
       action: { in: SUPPORTED_ACTIONS }
-    },
-    orderBy: { createdAt: "desc" },
-    ...(queryTake !== undefined ? { take: queryTake } : {}),
-    ...(querySkip !== undefined ? { skip: querySkip } : {})
-  });
+    }
+  };
 
-  const hasMoreFromDb = !hasSearch && logs.length > pageSize;
-  const logsForPage = hasMoreFromDb ? logs.slice(0, pageSize) : logs;
+  let hasMoreFromDb = false;
+  let nonSearchTotalEstimate = 0;
+  let logsForPage: Awaited<ReturnType<typeof prisma.auditLog.findMany>> = [];
+
+  if (hasSearch) {
+    const allLogs = await prisma.auditLog.findMany({
+      ...auditWhere,
+      orderBy: { createdAt: "desc" }
+    });
+    logsForPage = dedupeLogsByAction(allLogs);
+  } else {
+    const neededUnique = skip + pageSize + 1;
+    const uniqueLogs: Awaited<ReturnType<typeof prisma.auditLog.findMany>> = [];
+    const seenActions = new Set<string>();
+    let offset = 0;
+
+    while (uniqueLogs.length < neededUnique) {
+      const batch = await prisma.auditLog.findMany({
+        ...auditWhere,
+        orderBy: { createdAt: "desc" },
+        skip: offset,
+        take: NON_SEARCH_BATCH_SIZE
+      });
+
+      if (!batch.length) {
+        break;
+      }
+
+      offset += batch.length;
+      batch.forEach((log) => {
+        const actionKey = buildLogActionKey(log);
+        if (seenActions.has(actionKey)) return;
+        seenActions.add(actionKey);
+        uniqueLogs.push(log);
+      });
+
+      if (batch.length < NON_SEARCH_BATCH_SIZE) {
+        break;
+      }
+    }
+
+    hasMoreFromDb = uniqueLogs.length > skip + pageSize;
+    logsForPage = uniqueLogs.slice(skip, skip + pageSize);
+    nonSearchTotalEstimate = skip + logsForPage.length + (hasMoreFromDb ? 1 : 0);
+  }
 
   const mlItemIds = new Set<string>();
   const inventoryItemIds = new Set<string>();
@@ -242,7 +309,7 @@ export async function GET(req: Request) {
   const pagedNotifications = hasSearch
     ? filteredNotifications.slice(start, start + pageSize)
     : filteredNotifications;
-  const total = hasSearch ? filteredNotifications.length : skip + pagedNotifications.length + (hasMoreFromDb ? 1 : 0);
+  const total = hasSearch ? filteredNotifications.length : nonSearchTotalEstimate;
   const totalPages = hasSearch
     ? Math.max(1, Math.ceil(total / pageSize))
     : hasMoreFromDb

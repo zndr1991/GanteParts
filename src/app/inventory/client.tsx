@@ -365,8 +365,7 @@ const buildNotificationActionKey = (entry: NotificationItem) => {
   const itemId = (entry.itemId ?? "").toString().trim().toUpperCase();
   const status = (entry.status ?? "").toString().trim().toLowerCase();
   const success = entry.success ? "1" : "0";
-  const message = (entry.message ?? "").toString().trim().toLowerCase();
-  return [itemId, status, success, message].join("||");
+  return [itemId, status, success].join("||");
 };
 
 const dedupeNotificationsByAction = (entries: NotificationItem[]) => {
