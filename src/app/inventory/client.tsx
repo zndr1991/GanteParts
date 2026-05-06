@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { MAX_ITEM_PHOTOS } from "@/lib/inventory-serialization";
 
 type Item = {
@@ -135,7 +135,6 @@ const brandOptions = [
 const deletePasswordSecret = (process.env.NEXT_PUBLIC_DELETE_PASSWORD ?? "").trim();
 
 const MAX_PHOTOS = MAX_ITEM_PHOTOS;
-const INVENTORY_BATCH_SIZE = 100;
 const MAX_PHOTO_DIMENSION = 1280; // ancho/alto maximo al comprimir
 const PHOTO_QUALITY = 0.8; // calidad JPEG al recomprimir
 const drawingColors = ["#f87171", "#facc15", "#4ade80", "#38bdf8", "#f472b6", "#ffffff"];
@@ -477,22 +476,14 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [mlAction, setMlAction] = useState<null | "pause" | "activate">(null);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastNotificationIdRef = useRef<string | null>(null);
-  const lastInventorySearchRef = useRef(search);
   const isMountedRef = useRef(true);
   const localEstatusInternoRef = useRef(
     new Map<string, { value: string; updatedAt: number; prestadoVendidoA?: string | null }>()
   );
   const [isMobile, setIsMobile] = useState(false);
-  const pageSizeRef = useRef(Math.max(1, initialPage.pageSize || INVENTORY_BATCH_SIZE));
-  const [currentPage, setCurrentPage] = useState(
-    Math.max(1, Math.ceil(Math.max(1, initialPage.pageSize || INVENTORY_BATCH_SIZE) / INVENTORY_BATCH_SIZE))
-  );
   const [totalItems, setTotalItems] = useState(initialPage.total);
   const [statusTotals, setStatusTotals] = useState<Record<string, number>>(
     normalizeStatusTotals(initialPage.statusTotals)
-  );
-  const [totalPages, setTotalPages] = useState(
-    Math.max(1, initialPage.totalPages ?? Math.ceil(initialPage.total / INVENTORY_BATCH_SIZE))
   );
   const [loadingPage, setLoadingPage] = useState(false);
   const [sectionVisibility, setSectionVisibility] = useState<Record<SectionKey, boolean>>({
@@ -691,121 +682,65 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     }
   };
 
-  const fetchInventoryPage = useCallback(
-    async (page: number, options?: { preserveSelection?: boolean; statusFilter?: string | null; search?: string }) => {
-      const targetPage = Math.max(1, page);
-      setLoadingPage(true);
-      try {
-        const hasStatusFilterOverride = Boolean(
-          options && Object.prototype.hasOwnProperty.call(options, "statusFilter")
-        );
-        const hasSearchOverride = Boolean(
-          options && Object.prototype.hasOwnProperty.call(options, "search")
-        );
-        const activeStatusFilter = hasStatusFilterOverride
-          ? options?.statusFilter ?? null
-          : statusFilter;
-        const activeSearch = hasSearchOverride
-          ? options?.search ?? ""
-          : search;
-        const normalizedStatus = activeStatusFilter?.toString().trim().toUpperCase() ?? null;
-        const normalizedSearch = activeSearch.toString().trim();
-        const requestedPageSize = Math.max(INVENTORY_BATCH_SIZE, targetPage * INVENTORY_BATCH_SIZE);
-
-        const params = new URLSearchParams({
-          page: "1",
-          pageSize: requestedPageSize.toString()
-        });
-        if (normalizedStatus) {
-          params.set("statusFilter", normalizedStatus);
-        }
-        if (normalizedSearch.length) {
-          params.set("search", normalizedSearch);
-        }
-        const res = await fetch(`/api/inventory?${params.toString()}`, { cache: "no-store" });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(data.error || "No se pudo obtener el inventario");
-        }
-
-        const incoming: Item[] = Array.isArray(data.items) ? data.items : [];
-        const now = Date.now();
-        const incomingWithLocal = incoming.map((item) => {
-          const local = localEstatusInternoRef.current.get(item.id);
-          if (!local) return item;
-          if (now - local.updatedAt > 10 * 60 * 1000) {
-            localEstatusInternoRef.current.delete(item.id);
-            return item;
-          }
-          const currentInternal = (item.extraData?.estatus_interno ?? "").toString().trim().toUpperCase();
-          if (currentInternal === local.value) {
-            localEstatusInternoRef.current.delete(item.id);
-            return item;
-          }
-          const nextExtra: Record<string, any> = {
-            ...(item.extraData ?? {}),
-            estatus_interno: local.value || undefined
-          };
-          if (local.prestadoVendidoA !== undefined) {
-            nextExtra.prestado_vendido_a = local.prestadoVendidoA || undefined;
-          }
-          return { ...item, extraData: nextExtra };
-        });
-
-        const nextPageSize = typeof data.pageSize === "number" && data.pageSize > 0 ? data.pageSize : pageSizeRef.current;
-        pageSizeRef.current = nextPageSize;
-        const nextTotal = typeof data.total === "number" && data.total >= 0 ? data.total : incomingWithLocal.length;
-        const nextStatusTotals = normalizeStatusTotals(data.statusTotals);
-        const nextTotalPages = Math.max(1, Math.ceil(nextTotal / INVENTORY_BATCH_SIZE));
-        const normalizedPage = Math.min(targetPage, nextTotalPages);
-
-        setItems((current) => {
-          if (!updatingIds.length) {
-            return incomingWithLocal;
-          }
-          const updatingSet = new Set(updatingIds);
-          const currentMap = new Map(current.map((item) => [item.id, item]));
-          return incomingWithLocal.map((item) => (updatingSet.has(item.id) ? currentMap.get(item.id) ?? item : item));
-        });
-        setTotalItems(nextTotal);
-        setStatusTotals(nextStatusTotals);
-        setTotalPages(nextTotalPages);
-        setCurrentPage(normalizedPage);
-
-        if (!options?.preserveSelection) {
-          setSelectedIds([]);
-          setFocusedRowInfo(null);
-        }
-      } catch (err: any) {
-        setMessage(err?.message || "No se pudo obtener el inventario");
-      } finally {
-        setLoadingPage(false);
+  const fetchAllInventory = useCallback(async (options?: { preserveSelection?: boolean }) => {
+    setLoadingPage(true);
+    try {
+      const res = await fetch("/api/inventory/all", { cache: "no-store" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "No se pudo traer todo el inventario");
       }
-    },
-    [updatingIds, statusFilter, search]
-  );
 
-  useEffect(() => {
-    if (isManualOnly) return;
-    if (lastInventorySearchRef.current === search) return;
-    lastInventorySearchRef.current = search;
+      const incoming: Item[] = Array.isArray(data.items) ? data.items : [];
+      const now = Date.now();
+      const incomingWithLocal = incoming.map((item) => {
+        const local = localEstatusInternoRef.current.get(item.id);
+        if (!local) return item;
+        if (now - local.updatedAt > 10 * 60 * 1000) {
+          localEstatusInternoRef.current.delete(item.id);
+          return item;
+        }
+        const currentInternal = (item.extraData?.estatus_interno ?? "").toString().trim().toUpperCase();
+        if (currentInternal === local.value) {
+          localEstatusInternoRef.current.delete(item.id);
+          return item;
+        }
+        const nextExtra: Record<string, any> = {
+          ...(item.extraData ?? {}),
+          estatus_interno: local.value || undefined
+        };
+        if (local.prestadoVendidoA !== undefined) {
+          nextExtra.prestado_vendido_a = local.prestadoVendidoA || undefined;
+        }
+        return { ...item, extraData: nextExtra };
+      });
 
-    const debounceId = setTimeout(() => {
-      void fetchInventoryPage(1, { preserveSelection: false, search });
-    }, 280);
+      const nextTotal = typeof data.total === "number" && data.total >= 0 ? data.total : incomingWithLocal.length;
+      const nextStatusTotals = normalizeStatusTotals(data.statusTotals);
+      setItems(incomingWithLocal);
+      setTotalItems(nextTotal);
+      setStatusTotals(nextStatusTotals);
 
-    return () => clearTimeout(debounceId);
-  }, [fetchInventoryPage, isManualOnly, search]);
+      if (!options?.preserveSelection) {
+        setSelectedIds([]);
+        setFocusedRowInfo(null);
+      }
+
+      if (data.truncated) {
+        const missing = Math.max(0, nextTotal - incomingWithLocal.length);
+        setMessage(`Mostrando ${incomingWithLocal.length} registros. Faltan ${missing} por el limite maximo permitido.`);
+      }
+    } catch (err: any) {
+      setMessage(err?.message || "No se pudo traer todo el inventario");
+    } finally {
+      setLoadingPage(false);
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
     if (isManualOnly) return;
-    await fetchInventoryPage(currentPage, { preserveSelection: false });
-  }, [isManualOnly, fetchInventoryPage, currentPage]);
-
-  const loadMoreInventory = useCallback(async () => {
-    if (loadingPage || currentPage >= totalPages) return;
-    await fetchInventoryPage(currentPage + 1, { preserveSelection: true });
-  }, [loadingPage, currentPage, totalPages, fetchInventoryPage]);
+    await fetchAllInventory({ preserveSelection: false });
+  }, [isManualOnly, fetchAllInventory]);
 
   const deleteItems = useCallback(async (ids: string[], password?: string) => {
     if (!ids.length) return;
@@ -2520,7 +2455,48 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     }
   }, [canEditInventory, inventoryEditForm]);
 
-  const searchFilteredItems = items;
+  const deferredSearch = useDeferredValue(search);
+  const normalizedSearch = deferredSearch.trim().toLowerCase();
+
+  const inventorySearchIndex = useMemo(
+    () =>
+      items.map((item) => ({
+        item,
+        text: [
+          item.skuInternal,
+          item.title ?? "",
+          item.extraData?.descripcion_local ?? "",
+          item.extraData?.descripcion_ml ?? "",
+          item.mlItemId ?? "",
+          item.sellerCustomField ?? "",
+          item.extraData?.estatus_interno ?? "",
+          item.extraData?.origen ?? "",
+          item.extraData?.coche ?? "",
+          item.extraData?.pieza ?? "",
+          item.extraData?.marca ?? "",
+          item.extraData?.ano_desde ?? "",
+          item.extraData?.ano_hasta ?? "",
+          item.extraData?.ubicacion ?? "",
+          item.extraData?.inventario ?? "",
+          item.extraData?.revision ?? "",
+          item.extraData?.facebook ?? "",
+          item.extraData?.prestado_vendido_a ?? "",
+          item.extraData?.fecha_prestamo_pago ?? "",
+          String(item.stock ?? ""),
+          String(item.price ?? "")
+        ]
+          .join(" ")
+          .toLowerCase()
+      })),
+    [items]
+  );
+
+  const searchFilteredItems = useMemo(() => {
+    if (!normalizedSearch.length) return items;
+    return inventorySearchIndex
+      .filter((entry) => entry.text.includes(normalizedSearch))
+      .map((entry) => entry.item);
+  }, [items, inventorySearchIndex, normalizedSearch]);
 
   const normalizedStatusFilter = statusFilter?.toUpperCase() ?? null;
   const statusAndSearchFilteredItems = useMemo(() => {
@@ -2720,14 +2696,15 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       localCounts[key] = (localCounts[key] ?? 0) + 1;
     });
 
-    const source = Object.keys(statusTotals).length ? statusTotals : localCounts;
+    const useServerTotals = Object.keys(statusTotals).length > 0 && items.length < totalItems;
+    const source = useServerTotals ? statusTotals : localCounts;
     return Object.entries(source).sort((a, b) => {
       if (a[1] === b[1]) {
         return a[0].localeCompare(b[0]);
       }
       return b[1] - a[1];
     });
-  }, [items, statusTotals]);
+  }, [items, statusTotals, totalItems]);
 
   useEffect(() => {
     if (!thumbnailsActive) return;
@@ -3614,7 +3591,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                     onClick={() => {
                       const nextStatus = isActive ? null : label;
                       setStatusFilter(nextStatus);
-                      void fetchInventoryPage(1, { preserveSelection: false, statusFilter: nextStatus });
                     }}
                     className={`${baseClasses} ${activeClasses}`}
                   >
@@ -4267,22 +4243,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 </tbody>
               </table>
             )}
-          </div>
-          <div className="mt-4 flex flex-col items-center gap-2 sm:flex-row sm:justify-between">
-            <p className="text-[11px] text-slate-500">Bloques de 100 registros</p>
-            <div className="flex items-center gap-2">
-              <span className="min-w-[120px] text-center text-xs text-slate-300">
-                Carga {currentPage}/{totalPages}
-              </span>
-              <button
-                type="button"
-                onClick={loadMoreInventory}
-                disabled={loadingPage || currentPage >= totalPages}
-                className="rounded-md border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:border-amber-400 disabled:opacity-60"
-              >
-                {loadingPage ? "Cargando..." : currentPage >= totalPages ? "Sin mas registros" : "Cargar mas"}
-              </button>
-            </div>
           </div>
         </section>
         </>

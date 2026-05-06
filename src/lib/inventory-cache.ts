@@ -4,14 +4,13 @@ import { prisma } from "@/lib/prisma";
 import { INVENTORY_LIST_SELECT, serializeInventoryItem } from "@/lib/inventory-serialization";
 import { Prisma } from "@prisma/client";
 
-const INVENTORY_PAGE_SIZE = 100;
-const MAX_CACHE_TAKE_LIMIT = 5000;
+const INVENTORY_PAGE_SIZE = 0;
 const INVENTORY_INITIAL_LOAD_ENV = Number(
   process.env.INVENTORY_INITIAL_LOAD_LIMIT ?? process.env.INVENTORY_FULL_LOAD_LIMIT ?? `${INVENTORY_PAGE_SIZE}`
 );
 const MAX_CACHE_TAKE =
   Number.isFinite(INVENTORY_INITIAL_LOAD_ENV) && INVENTORY_INITIAL_LOAD_ENV > 0
-    ? Math.min(Math.floor(INVENTORY_INITIAL_LOAD_ENV), MAX_CACHE_TAKE_LIMIT)
+    ? Math.floor(INVENTORY_INITIAL_LOAD_ENV)
     : INVENTORY_PAGE_SIZE;
 
 type StatusCountRow = {
@@ -44,19 +43,21 @@ const getStatusTotals = async (ownerId: string | null) => {
 const fetchInventorySnapshot = unstable_cache(
   async (ownerId: string | null, take: number) => {
     const where = ownerId ? { ownerId } : undefined;
-    const requested = Number.isFinite(take) && take > 0 ? take : MAX_CACHE_TAKE;
-    const limit = Math.max(1, Math.min(requested, MAX_CACHE_TAKE));
+    const requested = Number.isFinite(take) && take > 0 ? Math.floor(take) : MAX_CACHE_TAKE;
 
-    const [items, total, statusTotals] = await Promise.all([
-      prisma.inventoryItem.findMany({
-        where,
-        orderBy: { updatedAt: "desc" },
-        take: limit,
-        select: INVENTORY_LIST_SELECT
-      }),
+    const [total, statusTotals] = await Promise.all([
       prisma.inventoryItem.count({ where }),
       getStatusTotals(ownerId)
     ]);
+
+    const limit = requested > 0 ? Math.min(requested, total) : total;
+
+    const items = await prisma.inventoryItem.findMany({
+      where,
+      orderBy: { updatedAt: "desc" },
+      take: limit,
+      select: INVENTORY_LIST_SELECT
+    });
 
     return {
       items: items.map((item) => serializeInventoryItem(item) as InventoryClientItem),
