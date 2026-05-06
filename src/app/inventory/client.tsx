@@ -136,6 +136,7 @@ const deletePasswordSecret = (process.env.NEXT_PUBLIC_DELETE_PASSWORD ?? "").tri
 
 const MAX_PHOTOS = MAX_ITEM_PHOTOS;
 const INVENTORY_PAGE_SIZE = 50;
+const INVENTORY_SEARCH_PAGE_SIZE = 5000;
 const MAX_PHOTO_DIMENSION = 1280; // ancho/alto maximo al comprimir
 const PHOTO_QUALITY = 0.8; // calidad JPEG al recomprimir
 const drawingColors = ["#f87171", "#facc15", "#4ade80", "#38bdf8", "#f472b6", "#ffffff"];
@@ -708,10 +709,11 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           : search;
         const normalizedStatus = activeStatusFilter?.toString().trim().toUpperCase() ?? null;
         const normalizedSearch = activeSearch.toString().trim();
+        const requestedPageSize = normalizedSearch.length ? INVENTORY_SEARCH_PAGE_SIZE : INVENTORY_PAGE_SIZE;
 
         const params = new URLSearchParams({
           page: targetPage.toString(),
-          pageSize: pageSizeRef.current.toString()
+          pageSize: requestedPageSize.toString()
         });
         if (normalizedStatus) {
           params.set("statusFilter", normalizedStatus);

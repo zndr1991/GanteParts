@@ -9,7 +9,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 const DEFAULT_PAGE_SIZE = 50;
-const MAX_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 5000;
 
 const canEditInventory = (role?: string | null) => {
   const normalized = (role ?? "").toLowerCase();
