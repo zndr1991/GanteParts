@@ -4,13 +4,14 @@ import { prisma } from "@/lib/prisma";
 import { INVENTORY_LIST_SELECT, serializeInventoryItem } from "@/lib/inventory-serialization";
 import { Prisma } from "@prisma/client";
 
-const INVENTORY_PAGE_SIZE = 50;
+const INVENTORY_PAGE_SIZE = 100;
+const MAX_CACHE_TAKE_LIMIT = 5000;
 const INVENTORY_INITIAL_LOAD_ENV = Number(
   process.env.INVENTORY_INITIAL_LOAD_LIMIT ?? process.env.INVENTORY_FULL_LOAD_LIMIT ?? `${INVENTORY_PAGE_SIZE}`
 );
 const MAX_CACHE_TAKE =
   Number.isFinite(INVENTORY_INITIAL_LOAD_ENV) && INVENTORY_INITIAL_LOAD_ENV > 0
-    ? Math.min(INVENTORY_INITIAL_LOAD_ENV, INVENTORY_PAGE_SIZE)
+    ? Math.min(Math.floor(INVENTORY_INITIAL_LOAD_ENV), MAX_CACHE_TAKE_LIMIT)
     : INVENTORY_PAGE_SIZE;
 
 type StatusCountRow = {

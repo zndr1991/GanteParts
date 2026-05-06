@@ -135,8 +135,7 @@ const brandOptions = [
 const deletePasswordSecret = (process.env.NEXT_PUBLIC_DELETE_PASSWORD ?? "").trim();
 
 const MAX_PHOTOS = MAX_ITEM_PHOTOS;
-const INVENTORY_PAGE_SIZE = 50;
-const INVENTORY_SEARCH_PAGE_SIZE = 5000;
+const INVENTORY_BATCH_SIZE = 100;
 const MAX_PHOTO_DIMENSION = 1280; // ancho/alto maximo al comprimir
 const PHOTO_QUALITY = 0.8; // calidad JPEG al recomprimir
 const drawingColors = ["#f87171", "#facc15", "#4ade80", "#38bdf8", "#f472b6", "#ffffff"];
@@ -484,14 +483,16 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     new Map<string, { value: string; updatedAt: number; prestadoVendidoA?: string | null }>()
   );
   const [isMobile, setIsMobile] = useState(false);
-  const pageSizeRef = useRef(Math.max(1, initialPage.pageSize || INVENTORY_PAGE_SIZE));
-  const [currentPage, setCurrentPage] = useState(Math.max(1, initialPage.page || 1));
+  const pageSizeRef = useRef(Math.max(1, initialPage.pageSize || INVENTORY_BATCH_SIZE));
+  const [currentPage, setCurrentPage] = useState(
+    Math.max(1, Math.ceil(Math.max(1, initialPage.pageSize || INVENTORY_BATCH_SIZE) / INVENTORY_BATCH_SIZE))
+  );
   const [totalItems, setTotalItems] = useState(initialPage.total);
   const [statusTotals, setStatusTotals] = useState<Record<string, number>>(
     normalizeStatusTotals(initialPage.statusTotals)
   );
   const [totalPages, setTotalPages] = useState(
-    Math.max(1, initialPage.totalPages ?? Math.ceil(initialPage.total / Math.max(1, initialPage.pageSize || INVENTORY_PAGE_SIZE)))
+    Math.max(1, initialPage.totalPages ?? Math.ceil(initialPage.total / INVENTORY_BATCH_SIZE))
   );
   const [loadingPage, setLoadingPage] = useState(false);
   const [sectionVisibility, setSectionVisibility] = useState<Record<SectionKey, boolean>>({
@@ -709,10 +710,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           : search;
         const normalizedStatus = activeStatusFilter?.toString().trim().toUpperCase() ?? null;
         const normalizedSearch = activeSearch.toString().trim();
-        const requestedPageSize = normalizedSearch.length ? INVENTORY_SEARCH_PAGE_SIZE : INVENTORY_PAGE_SIZE;
+        const requestedPageSize = Math.max(INVENTORY_BATCH_SIZE, targetPage * INVENTORY_BATCH_SIZE);
 
         const params = new URLSearchParams({
-          page: targetPage.toString(),
+          page: "1",
           pageSize: requestedPageSize.toString()
         });
         if (normalizedStatus) {
@@ -755,19 +756,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         pageSizeRef.current = nextPageSize;
         const nextTotal = typeof data.total === "number" && data.total >= 0 ? data.total : incomingWithLocal.length;
         const nextStatusTotals = normalizeStatusTotals(data.statusTotals);
-        const nextTotalPages =
-          typeof data.totalPages === "number" && data.totalPages > 0
-            ? data.totalPages
-            : Math.max(1, Math.ceil(nextTotal / Math.max(1, nextPageSize)));
-        const normalizedPage =
-          typeof data.page === "number" && data.page > 0
-            ? Math.min(data.page, nextTotalPages)
-            : Math.min(targetPage, nextTotalPages);
-
-        if (!incomingWithLocal.length && nextTotal > 0 && normalizedPage > 1) {
-          await fetchInventoryPage(normalizedPage - 1, options);
-          return;
-        }
+        const nextTotalPages = Math.max(1, Math.ceil(nextTotal / INVENTORY_BATCH_SIZE));
+        const normalizedPage = Math.min(targetPage, nextTotalPages);
 
         setItems((current) => {
           if (!updatingIds.length) {
@@ -812,14 +802,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     await fetchInventoryPage(currentPage, { preserveSelection: false });
   }, [isManualOnly, fetchInventoryPage, currentPage]);
 
-  const goToPreviousPage = useCallback(async () => {
-    if (loadingPage || currentPage <= 1) return;
-    await fetchInventoryPage(currentPage - 1);
-  }, [loadingPage, currentPage, fetchInventoryPage]);
-
-  const goToNextPage = useCallback(async () => {
+  const loadMoreInventory = useCallback(async () => {
     if (loadingPage || currentPage >= totalPages) return;
-    await fetchInventoryPage(currentPage + 1);
+    await fetchInventoryPage(currentPage + 1, { preserveSelection: true });
   }, [loadingPage, currentPage, totalPages, fetchInventoryPage]);
 
   const deleteItems = useCallback(async (ids: string[], password?: string) => {
@@ -3642,8 +3627,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           )}
           <p className="text-xs text-slate-400">
             {loadingPage
-              ? `Cargando pagina ${currentPage}...`
-              : `Pagina ${currentPage} de ${totalPages} · Mostrando ${items.length} de ${totalItems} registros`}
+              ? "Cargando registros..."
+              : `Mostrando ${items.length} de ${totalItems} registros`}
           </p>
           <div className="mt-4 space-y-3 md:hidden">
             {filteredItems.length === 0 ? (
@@ -4284,26 +4269,18 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
             )}
           </div>
           <div className="mt-4 flex flex-col items-center gap-2 sm:flex-row sm:justify-between">
-            <p className="text-[11px] text-slate-500">50 registros por pagina</p>
+            <p className="text-[11px] text-slate-500">Bloques de 100 registros</p>
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={goToPreviousPage}
-                disabled={loadingPage || currentPage <= 1}
-                className="rounded-md border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:border-amber-400 disabled:opacity-60"
-              >
-                Anterior
-              </button>
               <span className="min-w-[120px] text-center text-xs text-slate-300">
-                Pagina {currentPage}/{totalPages}
+                Carga {currentPage}/{totalPages}
               </span>
               <button
                 type="button"
-                onClick={goToNextPage}
+                onClick={loadMoreInventory}
                 disabled={loadingPage || currentPage >= totalPages}
                 className="rounded-md border border-slate-600 px-4 py-2 text-sm text-slate-200 hover:border-amber-400 disabled:opacity-60"
               >
-                Siguiente
+                {loadingPage ? "Cargando..." : currentPage >= totalPages ? "Sin mas registros" : "Cargar mas"}
               </button>
             </div>
           </div>
