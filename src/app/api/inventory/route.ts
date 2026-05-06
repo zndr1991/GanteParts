@@ -165,18 +165,18 @@ export async function GET(req: Request) {
   const ownerId = role === "viewer" ? session.user.id : null;
   const where = ownerId ? { ownerId } : undefined;
 
-  const { searchParams } = new URL(req.url);
-  const { page, pageSize, skip } = parsePagination(searchParams);
-  const statusFilter = parseStatusFilter(searchParams);
-  const searchFilter = parseSearchFilter(searchParams);
+  try {
+    const { searchParams } = new URL(req.url);
+    const { page, pageSize, skip } = parsePagination(searchParams);
+    const statusFilter = parseStatusFilter(searchParams);
+    const searchFilter = parseSearchFilter(searchParams);
 
-  if (statusFilter || searchFilter) {
-    const ownerSql = ownerId ? Prisma.sql`AND "ownerId" = ${ownerId}` : Prisma.empty;
-    const statusSql = buildStatusFilterSql(statusFilter);
-    const searchSql = buildSearchFilterSql(searchFilter);
+    if (statusFilter || searchFilter) {
+      const ownerSql = ownerId ? Prisma.sql`AND "ownerId" = ${ownerId}` : Prisma.empty;
+      const statusSql = buildStatusFilterSql(statusFilter);
+      const searchSql = buildSearchFilterSql(searchFilter);
 
-    const [idRows, countRows, statusTotals] = await Promise.all([
-      prisma.$queryRaw<InventoryIdRow[]>(Prisma.sql`
+      const idRows = await prisma.$queryRaw<InventoryIdRow[]>(Prisma.sql`
         SELECT "id"
         FROM "InventoryItem"
         WHERE 1=1
@@ -186,27 +186,48 @@ export async function GET(req: Request) {
         ORDER BY "updatedAt" DESC
         OFFSET ${skip}
         LIMIT ${pageSize}
-      `),
-      prisma.$queryRaw<CountRow[]>(Prisma.sql`
+      `);
+      const countRows = await prisma.$queryRaw<CountRow[]>(Prisma.sql`
         SELECT COUNT(*) AS count
         FROM "InventoryItem"
         WHERE 1=1
         ${ownerSql}
         ${statusSql}
         ${searchSql}
-      `),
-      getStatusTotals(ownerId)
-    ]);
+      `);
+      const statusTotals = await getStatusTotals(ownerId);
 
-    const ids = idRows.map((row) => row.id);
-    const items = ids.length
-      ? await prisma.inventoryItem.findMany({
-          where: ownerId ? { ownerId, id: { in: ids } } : { id: { in: ids } },
-          orderBy: { updatedAt: "desc" }
-        })
-      : [];
+      const ids = idRows.map((row) => row.id);
+      const items = ids.length
+        ? await prisma.inventoryItem.findMany({
+            where: ownerId ? { ownerId, id: { in: ids } } : { id: { in: ids } },
+            orderBy: { updatedAt: "desc" }
+          })
+        : [];
 
-    const total = Number(countRows[0]?.count ?? 0);
+      const total = Number(countRows[0]?.count ?? 0);
+      const serialized = items.map((item) => serializeInventoryItem(item));
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+      return NextResponse.json({
+        page,
+        pageSize,
+        total,
+        totalPages,
+        statusTotals,
+        items: serialized
+      });
+    }
+
+    const items = await prisma.inventoryItem.findMany({
+      where,
+      orderBy: { updatedAt: "desc" },
+      skip,
+      take: pageSize
+    });
+    const total = await prisma.inventoryItem.count({ where });
+    const statusTotals = await getStatusTotals(ownerId);
+
     const serialized = items.map((item) => serializeInventoryItem(item));
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
@@ -218,30 +239,15 @@ export async function GET(req: Request) {
       statusTotals,
       items: serialized
     });
+  } catch (err: any) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2024") {
+      return NextResponse.json(
+        { error: "El servidor esta ocupado. Intenta de nuevo en unos segundos." },
+        { status: 503 }
+      );
+    }
+    throw err;
   }
-
-  const [items, total, statusTotals] = await Promise.all([
-    prisma.inventoryItem.findMany({
-      where,
-      orderBy: { updatedAt: "desc" },
-      skip,
-      take: pageSize
-    }),
-    prisma.inventoryItem.count({ where }),
-    getStatusTotals(ownerId)
-  ]);
-
-  const serialized = items.map((item) => serializeInventoryItem(item));
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-
-  return NextResponse.json({
-    page,
-    pageSize,
-    total,
-    totalPages,
-    statusTotals,
-    items: serialized
-  });
 }
 
 export async function POST(req: Request) {

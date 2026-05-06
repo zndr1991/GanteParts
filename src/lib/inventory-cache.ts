@@ -1,16 +1,18 @@
 import { unstable_cache } from "next/cache";
 import type { InventoryClientItem } from "@/app/inventory/client";
 import { prisma } from "@/lib/prisma";
-import { INVENTORY_LIST_SELECT, serializeInventoryItem } from "@/lib/inventory-serialization";
+import { serializeInventoryItem } from "@/lib/inventory-serialization";
 import { Prisma } from "@prisma/client";
+import { fetchInventoryItemsSafely } from "@/lib/inventory-safe-load";
 
-const INVENTORY_PAGE_SIZE = 0;
+const INVENTORY_PAGE_SIZE = 200;
+const MAX_INITIAL_PAGE_SIZE = 3000;
 const INVENTORY_INITIAL_LOAD_ENV = Number(
   process.env.INVENTORY_INITIAL_LOAD_LIMIT ?? process.env.INVENTORY_FULL_LOAD_LIMIT ?? `${INVENTORY_PAGE_SIZE}`
 );
 const MAX_CACHE_TAKE =
   Number.isFinite(INVENTORY_INITIAL_LOAD_ENV) && INVENTORY_INITIAL_LOAD_ENV > 0
-    ? Math.floor(INVENTORY_INITIAL_LOAD_ENV)
+    ? Math.min(Math.floor(INVENTORY_INITIAL_LOAD_ENV), MAX_INITIAL_PAGE_SIZE)
     : INVENTORY_PAGE_SIZE;
 
 type StatusCountRow = {
@@ -45,24 +47,25 @@ const fetchInventorySnapshot = unstable_cache(
     const where = ownerId ? { ownerId } : undefined;
     const requested = Number.isFinite(take) && take > 0 ? Math.floor(take) : MAX_CACHE_TAKE;
 
-    const [total, statusTotals] = await Promise.all([
-      prisma.inventoryItem.count({ where }),
-      getStatusTotals(ownerId)
-    ]);
+    const total = await prisma.inventoryItem.count({ where });
+    const statusTotals = await getStatusTotals(ownerId);
 
     const limit = requested > 0 ? Math.min(requested, total) : total;
 
-    const items = await prisma.inventoryItem.findMany({
+    const { items, skippedIds } = await fetchInventoryItemsSafely({
       where,
-      orderBy: { updatedAt: "desc" },
-      take: limit,
-      select: INVENTORY_LIST_SELECT
+      take: limit
     });
+
+    if (skippedIds.length) {
+      console.error(`Inventory snapshot omitio ${skippedIds.length} registros con texto invalido`);
+    }
 
     return {
       items: items.map((item) => serializeInventoryItem(item) as InventoryClientItem),
       total,
-      statusTotals
+      statusTotals,
+      skippedCount: skippedIds.length
     };
   },
   ["inventory-initial"],

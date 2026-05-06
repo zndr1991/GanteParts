@@ -476,6 +476,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [mlAction, setMlAction] = useState<null | "pause" | "activate">(null);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastNotificationIdRef = useRef<string | null>(null);
+  const fullLoadAttemptedRef = useRef(false);
   const isMountedRef = useRef(true);
   const localEstatusInternoRef = useRef(
     new Map<string, { value: string; updatedAt: number; prestadoVendidoA?: string | null }>()
@@ -683,6 +684,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   };
 
   const fetchAllInventory = useCallback(async (options?: { preserveSelection?: boolean }) => {
+    setMessage(null);
     setLoadingPage(true);
     try {
       const res = await fetch("/api/inventory/all", { cache: "no-store" });
@@ -717,6 +719,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
       const nextTotal = typeof data.total === "number" && data.total >= 0 ? data.total : incomingWithLocal.length;
       const nextStatusTotals = normalizeStatusTotals(data.statusTotals);
+      const skippedCount = Number.isFinite(Number(data.skippedCount)) ? Number(data.skippedCount) : 0;
       setItems(incomingWithLocal);
       setTotalItems(nextTotal);
       setStatusTotals(nextStatusTotals);
@@ -726,9 +729,12 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         setFocusedRowInfo(null);
       }
 
-      if (data.truncated) {
+      if (data.truncated || skippedCount > 0) {
         const missing = Math.max(0, nextTotal - incomingWithLocal.length);
-        setMessage(`Mostrando ${incomingWithLocal.length} registros. Faltan ${missing} por el limite maximo permitido.`);
+        const reason = data.truncated
+          ? "por el limite maximo permitido"
+          : "porque algunos registros tienen texto invalido";
+        setMessage(`Mostrando ${incomingWithLocal.length} registros. Faltan ${missing} ${reason}.`);
       }
     } catch (err: any) {
       setMessage(err?.message || "No se pudo traer todo el inventario");
@@ -741,6 +747,14 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     if (isManualOnly) return;
     await fetchAllInventory({ preserveSelection: false });
   }, [isManualOnly, fetchAllInventory]);
+
+  useEffect(() => {
+    if (isManualOnly) return;
+    if (fullLoadAttemptedRef.current) return;
+    if (items.length >= totalItems) return;
+    fullLoadAttemptedRef.current = true;
+    void fetchAllInventory({ preserveSelection: false });
+  }, [fetchAllInventory, isManualOnly, items.length, totalItems]);
 
   const deleteItems = useCallback(async (ids: string[], password?: string) => {
     if (!ids.length) return;

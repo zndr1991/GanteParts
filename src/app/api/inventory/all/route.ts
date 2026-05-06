@@ -4,8 +4,9 @@ export const runtime = "nodejs";
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { INVENTORY_LIST_SELECT, serializeInventoryItem } from "@/lib/inventory-serialization";
+import { serializeInventoryItem } from "@/lib/inventory-serialization";
 import { Prisma } from "@prisma/client";
+import { fetchInventoryItemsSafely } from "@/lib/inventory-safe-load";
 
 const DEFAULT_FULL_LOAD_LIMIT = 0;
 const FULL_LOAD_LIMIT_ENV = Number(
@@ -53,28 +54,29 @@ export async function GET() {
   const where = role === "viewer" ? { ownerId: session.user.id } : undefined;
   const ownerId = role === "viewer" ? session.user.id : null;
 
-  const [total, statusTotals] = await Promise.all([
-    prisma.inventoryItem.count({ where }),
-    getStatusTotals(ownerId)
-  ]);
+  const total = await prisma.inventoryItem.count({ where });
+  const statusTotals = await getStatusTotals(ownerId);
   if (total === 0) {
-    return NextResponse.json({ total: 0, statusTotals: {}, items: [] });
+    return NextResponse.json({ total: 0, statusTotals: {}, items: [], skippedCount: 0, truncated: false });
   }
 
   const shouldTruncate = FULL_LOAD_LIMIT > 0 && total > FULL_LOAD_LIMIT;
-  const take = shouldTruncate ? FULL_LOAD_LIMIT : total;
+  const take = shouldTruncate ? FULL_LOAD_LIMIT : undefined;
 
-  const items = await prisma.inventoryItem.findMany({
+  const { items, skippedIds } = await fetchInventoryItemsSafely({
     where,
-    orderBy: { updatedAt: "desc" },
-    take,
-    select: INVENTORY_LIST_SELECT
+    take
   });
+
+  if (skippedIds.length) {
+    console.error(`Inventory all omitio ${skippedIds.length} registros con texto invalido`);
+  }
 
   return NextResponse.json({
     total,
     statusTotals,
     items: items.map((item) => serializeInventoryItem(item)),
+    skippedCount: skippedIds.length,
     truncated: shouldTruncate
   });
 }
