@@ -1708,6 +1708,90 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     }
   };
 
+  const registerSoldItemInFinance = useCallback(
+    async ({
+      piece,
+      skuInternal,
+      defaultAmount,
+      saleDate
+    }: {
+      piece: string;
+      skuInternal: string;
+      defaultAmount?: number | null;
+      saleDate?: string | null;
+    }): Promise<SoldFinanceRegistrationResult> => {
+      const shouldRegister = window.confirm("¿Quieres agregar esta pieza vendida a finanzas?");
+      if (!shouldRegister) return { status: "skipped" };
+
+      const typeAnswer = window.prompt(
+        "¿En qué sección quieres registrarla?\nEscribe INGRESO o EGRESO",
+        "INGRESO"
+      );
+      if (typeAnswer === null) return { status: "skipped" };
+
+      const normalizedType = typeAnswer.trim().toUpperCase();
+      if (normalizedType !== "INGRESO" && normalizedType !== "EGRESO") {
+        return {
+          status: "failed",
+          message: "Venta marcada como VENDIDO, pero no se registró en finanzas: elige INGRESO o EGRESO"
+        };
+      }
+
+      const entryType: FinanceEntryType = normalizedType === "INGRESO" ? "income" : "expense";
+
+      const defaultAmountText =
+        defaultAmount !== null &&
+        defaultAmount !== undefined &&
+        Number.isFinite(defaultAmount) &&
+        defaultAmount > 0
+          ? String(defaultAmount)
+          : "";
+
+      const amountAnswer = window.prompt(
+        "¿En cuánto se vendió la pieza?\nPuedes cambiar el costo para registrarlo en finanzas.",
+        defaultAmountText
+      );
+      if (amountAnswer === null) return { status: "skipped" };
+
+      const amount = parsePositiveAmountInput(amountAnswer);
+      if (!amount) {
+        return {
+          status: "failed",
+          message: "Venta marcada como VENDIDO, pero no se registró en finanzas: monto inválido"
+        };
+      }
+
+      const concept = ((piece || "PIEZA VENDIDA").trim().toUpperCase() || "PIEZA VENDIDA").slice(0, 180);
+      const code = (skuInternal ?? "").toString().trim().toUpperCase() || null;
+      const date = toDateOnly(saleDate);
+
+      const response = await fetch("/api/finance/entries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: entryType,
+          date,
+          concept,
+          code,
+          amount
+        })
+      });
+
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        return {
+          status: "failed",
+          message:
+            payload?.error ||
+            "Venta marcada como VENDIDO, pero no se pudo registrar en finanzas"
+        };
+      }
+
+      return { status: "registered", entryType };
+    },
+    []
+  );
+
   const updateEstatusInterno = useCallback(async (
     id: string,
     value: string,
@@ -2209,90 +2293,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       updateUbicacion(item.id, val);
     },
     [canEditInventory, updateExtraDataInState, updateUbicacion]
-  );
-
-  const registerSoldItemInFinance = useCallback(
-    async ({
-      piece,
-      skuInternal,
-      defaultAmount,
-      saleDate
-    }: {
-      piece: string;
-      skuInternal: string;
-      defaultAmount?: number | null;
-      saleDate?: string | null;
-    }): Promise<SoldFinanceRegistrationResult> => {
-      const shouldRegister = window.confirm("¿Quieres agregar esta pieza vendida a finanzas?");
-      if (!shouldRegister) return { status: "skipped" };
-
-      const typeAnswer = window.prompt(
-        "¿En qué sección quieres registrarla?\nEscribe INGRESO o EGRESO",
-        "INGRESO"
-      );
-      if (typeAnswer === null) return { status: "skipped" };
-
-      const normalizedType = typeAnswer.trim().toUpperCase();
-      if (normalizedType !== "INGRESO" && normalizedType !== "EGRESO") {
-        return {
-          status: "failed",
-          message: "Venta marcada como VENDIDO, pero no se registró en finanzas: elige INGRESO o EGRESO"
-        };
-      }
-
-      const entryType: FinanceEntryType = normalizedType === "INGRESO" ? "income" : "expense";
-
-      const defaultAmountText =
-        defaultAmount !== null &&
-        defaultAmount !== undefined &&
-        Number.isFinite(defaultAmount) &&
-        defaultAmount > 0
-          ? String(defaultAmount)
-          : "";
-
-      const amountAnswer = window.prompt(
-        "¿En cuánto se vendió la pieza?\nPuedes cambiar el costo para registrarlo en finanzas.",
-        defaultAmountText
-      );
-      if (amountAnswer === null) return { status: "skipped" };
-
-      const amount = parsePositiveAmountInput(amountAnswer);
-      if (!amount) {
-        return {
-          status: "failed",
-          message: "Venta marcada como VENDIDO, pero no se registró en finanzas: monto inválido"
-        };
-      }
-
-      const concept = ((piece || "PIEZA VENDIDA").trim().toUpperCase() || "PIEZA VENDIDA").slice(0, 180);
-      const code = (skuInternal ?? "").toString().trim().toUpperCase() || null;
-      const date = toDateOnly(saleDate);
-
-      const response = await fetch("/api/finance/entries", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: entryType,
-          date,
-          concept,
-          code,
-          amount
-        })
-      });
-
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        return {
-          status: "failed",
-          message:
-            payload?.error ||
-            "Venta marcada como VENDIDO, pero no se pudo registrar en finanzas"
-        };
-      }
-
-      return { status: "registered", entryType };
-    },
-    []
   );
 
   const handleMlItemBlur = useCallback(
