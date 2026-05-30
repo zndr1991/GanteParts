@@ -4088,7 +4088,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
                       <button
                         type="button"
-                        className={`ml-auto relative flex h-14 w-14 items-center justify-center overflow-hidden rounded-xl border border-slate-800 bg-slate-950/60 text-[10px] text-slate-500 transition ${
+                        className={`ml-auto relative flex h-14 w-14 items-center justify-center overflow-hidden rounded-xl border border-slate-800 bg-slate-950/60 text-[10px] text-slate-500 ${
                           canEditInventory ? "hover:border-amber-300" : "opacity-60"
                         }`}
                         onClick={(event) => {
@@ -4322,7 +4322,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                     return (
                       <tr
                         key={item.id}
-                        className={`h-14 border-t border-slate-900/80 bg-slate-900/30 transition hover:bg-slate-900/70 ${rowStatusClass}`}
+                        className={`h-14 border-t border-slate-900/80 bg-slate-900/30 hover:bg-slate-900/70 ${rowStatusClass}`}
                         onClick={() => setFocusedRowInfo(toFocusedInfo(item))}
                       >
                         <td className="whitespace-nowrap px-4 py-3 align-middle">
@@ -4382,7 +4382,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                           <div className="flex items-center gap-3">
                             <button
                               type="button"
-                              className={`relative flex h-16 w-16 items-center justify-center overflow-hidden rounded-xl border border-slate-800 bg-slate-950/60 text-[10px] text-slate-500 transition ${
+                              className={`relative flex h-16 w-16 items-center justify-center overflow-hidden rounded-xl border border-slate-800 bg-slate-950/60 text-[10px] text-slate-500 ${
                                 canEditInventory ? "hover:border-amber-300" : "opacity-60"
                               }`}
                               onClick={(event) => {
