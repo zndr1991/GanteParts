@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { activateItem, pauseItem } from "@/lib/mercadolibre";
 import { MAX_ITEM_PHOTOS, serializeInventoryItem } from "@/lib/inventory-serialization";
 import { Prisma } from "@prisma/client";
+import { revalidateTag } from "next/cache";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -19,6 +20,10 @@ const canEditInventory = (role?: string | null) => {
 const canCreateInventory = (role?: string | null) => {
   const normalized = (role ?? "").toLowerCase();
   return normalized === "admin" || normalized === "operator" || normalized === "uploader";
+};
+
+const revalidateInventorySnapshotCache = () => {
+  revalidateTag("inventory-initial");
 };
 
 const payloadSchema = z.object({
@@ -294,6 +299,8 @@ export async function POST(req: Request) {
       console.error("Error al crear auditLog de inventario", logErr);
     }
 
+    revalidateInventorySnapshotCache();
+
     return NextResponse.json(serializeInventoryItem(item, { includePhotos: true }), { status: 201 });
   } catch (err: any) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
@@ -344,6 +351,8 @@ export async function DELETE(req: Request) {
       metadata: { count: result.count, ids }
     }
   });
+
+  revalidateInventorySnapshotCache();
 
   return NextResponse.json({ deleted: result.count });
 }
@@ -567,6 +576,8 @@ export async function PATCH(req: Request) {
       }
     }
   });
+
+  revalidateInventorySnapshotCache();
 
   return NextResponse.json({
     ...serializeInventoryItem(item),
