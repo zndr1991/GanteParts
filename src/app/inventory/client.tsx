@@ -560,6 +560,15 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   );
   const [workerSearchResult, setWorkerSearchResult] = useState<{ query: string; ids: string[] } | null>(null);
   const [workerSearching, setWorkerSearching] = useState(false);
+  const [initialFullLoadPending, setInitialFullLoadPending] = useState(
+    !isManualOnly && initialPage.items.length < initialPage.total
+  );
+  const [initialFullLoadProgress, setInitialFullLoadProgress] = useState(() => {
+    const total = Math.max(1, initialPage.total || initialPage.items.length || 1);
+    const loaded = Math.min(initialPage.items.length, total);
+    const base = Math.round((loaded / total) * 100);
+    return Math.max(5, Math.min(base, 99));
+  });
   const [loadingPage, setLoadingPage] = useState(false);
   const [inventoryPage, setInventoryPage] = useState(1);
   const [tableScrollRowStart, setTableScrollRowStart] = useState(0);
@@ -578,6 +587,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const canImportInventory = canEditInventory;
   const canManageMercadoLibre = canEditInventory;
   const thumbnailsActive = THUMBNAILS_ENABLED;
+  const inventoryNavigationLocked = !isManualOnly && initialFullLoadPending;
+  const initialFullLoadPercent = Math.max(0, Math.min(100, initialFullLoadProgress));
 
   useEffect(() => {
     const handleResize = () => {
@@ -858,10 +869,12 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           : "porque algunos registros tienen texto invalido";
         setMessage(`Mostrando ${incomingWithLocal.length} registros. Faltan ${missing} ${reason}.`);
       }
+      return true;
     } catch (err: any) {
       if (!silent) {
         setMessage(err?.message || "No se pudo traer todo el inventario");
       }
+      return false;
     } finally {
       if (!silent) {
         setLoadingPage(false);
@@ -877,32 +890,40 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   useEffect(() => {
     if (isManualOnly) return;
     if (fullLoadAttemptedRef.current) return;
-    if (items.length >= totalItems) return;
-
-    let cancelled = false;
-    const triggerFullLoad = () => {
-      if (cancelled || fullLoadAttemptedRef.current) return;
-      fullLoadAttemptedRef.current = true;
-      void fetchAllInventory({ preserveSelection: false, silent: true });
-    };
-
-    const idleApi = window as Window & {
-      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
-      cancelIdleCallback?: (id: number) => void;
-    };
-
-    if (typeof idleApi.requestIdleCallback === "function") {
-      const idleId = idleApi.requestIdleCallback(triggerFullLoad, { timeout: 1600 });
-      return () => {
-        cancelled = true;
-        idleApi.cancelIdleCallback?.(idleId);
-      };
+    if (items.length >= totalItems) {
+      setInitialFullLoadPending(false);
+      setInitialFullLoadProgress(100);
+      return;
     }
 
-    const timeoutId = window.setTimeout(triggerFullLoad, 250);
+    let cancelled = false;
+    fullLoadAttemptedRef.current = true;
+
+    const total = Math.max(1, totalItems);
+    const loaded = Math.min(items.length, total);
+    const startProgress = Math.max(5, Math.min(Math.round((loaded / total) * 100), 95));
+    setInitialFullLoadPending(true);
+    setInitialFullLoadProgress(startProgress);
+
+    const progressTimer = window.setInterval(() => {
+      setInitialFullLoadProgress((current) => (current >= 95 ? current : current + 1));
+    }, 180);
+
+    const runFullLoad = async () => {
+      const success = await fetchAllInventory({ preserveSelection: false, silent: true });
+      window.clearInterval(progressTimer);
+      if (cancelled) return;
+      if (success) {
+        setInitialFullLoadProgress(100);
+      }
+      setInitialFullLoadPending(false);
+    };
+
+    void runFullLoad();
+
     return () => {
       cancelled = true;
-      window.clearTimeout(timeoutId);
+      window.clearInterval(progressTimer);
     };
   }, [fetchAllInventory, isManualOnly, items.length, totalItems]);
 
@@ -3952,7 +3973,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 <button
                   type="button"
                   onClick={() => setInventoryPage(1)}
-                  disabled={inventoryPage === 1}
+                  disabled={inventoryNavigationLocked || inventoryPage === 1}
                   className="rounded-md border border-slate-600 px-2 py-1 text-xs hover:border-amber-400 disabled:opacity-50"
                 >
                   «
@@ -3960,7 +3981,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 <button
                   type="button"
                   onClick={() => setInventoryPage((prev) => Math.max(1, prev - 1))}
-                  disabled={inventoryPage === 1}
+                  disabled={inventoryNavigationLocked || inventoryPage === 1}
                   className="rounded-md border border-slate-600 px-3 py-1 text-xs hover:border-amber-400 disabled:opacity-50"
                 >
                   Anterior
@@ -3968,7 +3989,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 <button
                   type="button"
                   onClick={() => setInventoryPage((prev) => Math.min(filteredTotalPages, prev + 1))}
-                  disabled={inventoryPage >= filteredTotalPages}
+                  disabled={inventoryNavigationLocked || inventoryPage >= filteredTotalPages}
                   className="rounded-md border border-slate-600 px-3 py-1 text-xs hover:border-amber-400 disabled:opacity-50"
                 >
                   Siguiente
@@ -3976,7 +3997,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 <button
                   type="button"
                   onClick={() => setInventoryPage(filteredTotalPages)}
-                  disabled={inventoryPage >= filteredTotalPages}
+                  disabled={inventoryNavigationLocked || inventoryPage >= filteredTotalPages}
                   className="rounded-md border border-slate-600 px-2 py-1 text-xs hover:border-amber-400 disabled:opacity-50"
                 >
                   »
@@ -3985,12 +4006,31 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
             </div>
           )}
           <p className="text-xs text-slate-400">
-            {loadingPage
+            {inventoryNavigationLocked
+              ? `Cargando inventario completo... ${initialFullLoadPercent}%`
+              : loadingPage
               ? "Cargando registros..."
               : `Mostrando ${paginatedVisibleStart}-${paginatedVisibleEnd} de ${filteredItems.length} filtrados (${items.length} cargados)`}
           </p>
+          {inventoryNavigationLocked && (
+            <div className="mt-2 rounded-2xl border border-amber-400/40 bg-amber-400/10 p-3">
+              <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-amber-100">
+                <span>Cargando informacion del inventario</span>
+                <span>{initialFullLoadPercent}%</span>
+              </div>
+              <div className="mt-2 h-2 w-full rounded-full bg-slate-800">
+                <div
+                  className="h-full rounded-full bg-amber-300 transition-[width] duration-300"
+                  style={{ width: `${initialFullLoadPercent}%` }}
+                />
+              </div>
+              <p className="mt-2 text-[11px] text-slate-300">
+                La navegacion se habilita automaticamente al completar la carga.
+              </p>
+            </div>
+          )}
           {isMobile && (
-          <div className="mt-4 space-y-3">
+          <div className={`mt-4 space-y-3 ${inventoryNavigationLocked ? "pointer-events-none opacity-60" : ""}`}>
             {filteredItems.length === 0 ? (
               <div className="rounded-2xl border border-slate-800 bg-slate-950/30 p-6 text-center text-sm text-slate-400">
                 {workerSearchPending
@@ -4160,10 +4200,13 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           <div
             ref={desktopTableContainerRef}
             onScroll={(event) => {
+              if (inventoryNavigationLocked) return;
               const nextRowStart = Math.floor(event.currentTarget.scrollTop / tableRowHeight);
               setTableScrollRowStart((current) => (current === nextRowStart ? current : nextRowStart));
             }}
-            className="mt-4 overflow-auto rounded-2xl border border-slate-800 bg-slate-950/30 shadow-inner shadow-black/40"
+            className={`mt-4 rounded-2xl border border-slate-800 bg-slate-950/30 shadow-inner shadow-black/40 ${
+              inventoryNavigationLocked ? "pointer-events-none overflow-hidden opacity-60" : "overflow-auto"
+            }`}
             style={{ maxHeight: tableHeaderHeight + tableViewportHeight }}
           >
             {filteredItems.length === 0 ? (
