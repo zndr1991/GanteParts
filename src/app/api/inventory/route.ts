@@ -90,6 +90,12 @@ const parseSearchFilter = (searchParams: URLSearchParams) => {
   return raw;
 };
 
+const parseFacetFilter = (searchParams: URLSearchParams, key: "marcaFilter" | "cocheFilter" | "piezaFilter") => {
+  const raw = (searchParams.get(key) ?? "").trim();
+  if (!raw.length) return null;
+  return raw.toUpperCase();
+};
+
 const buildStatusFilterSql = (statusFilter: string | null) => {
   if (!statusFilter) return Prisma.empty;
   return Prisma.sql`
@@ -124,6 +130,30 @@ const buildSearchFilterSql = (searchFilter: string | null) => {
       OR CAST(COALESCE("stock", 0) AS TEXT) ILIKE ${likeValue}
       OR CAST(COALESCE("price", 0) AS TEXT) ILIKE ${likeValue}
     )
+  `;
+};
+
+const buildMarcaFilterSql = (marcaFilter: string | null) => {
+  if (!marcaFilter) return Prisma.empty;
+  return Prisma.sql`
+    AND COALESCE(NULLIF(UPPER(TRIM("extraData"->>'marca')), ''), '') = ${marcaFilter}
+  `;
+};
+
+const buildCocheFilterSql = (cocheFilter: string | null) => {
+  if (!cocheFilter) return Prisma.empty;
+  return Prisma.sql`
+    AND COALESCE(NULLIF(UPPER(TRIM("extraData"->>'coche')), ''), '') = ${cocheFilter}
+  `;
+};
+
+const buildPiezaFilterSql = (piezaFilter: string | null) => {
+  if (!piezaFilter) return Prisma.empty;
+  return Prisma.sql`
+    AND COALESCE(
+      NULLIF(UPPER(TRIM("extraData"->>'pieza')), ''),
+      UPPER(TRIM(COALESCE("title", '')))
+    ) = ${piezaFilter}
   `;
 };
 
@@ -175,11 +205,17 @@ export async function GET(req: Request) {
     const { page, pageSize, skip } = parsePagination(searchParams);
     const statusFilter = parseStatusFilter(searchParams);
     const searchFilter = parseSearchFilter(searchParams);
+    const marcaFilter = parseFacetFilter(searchParams, "marcaFilter");
+    const cocheFilter = parseFacetFilter(searchParams, "cocheFilter");
+    const piezaFilter = parseFacetFilter(searchParams, "piezaFilter");
 
-    if (statusFilter || searchFilter) {
+    if (statusFilter || searchFilter || marcaFilter || cocheFilter || piezaFilter) {
       const ownerSql = ownerId ? Prisma.sql`AND "ownerId" = ${ownerId}` : Prisma.empty;
       const statusSql = buildStatusFilterSql(statusFilter);
       const searchSql = buildSearchFilterSql(searchFilter);
+      const marcaSql = buildMarcaFilterSql(marcaFilter);
+      const cocheSql = buildCocheFilterSql(cocheFilter);
+      const piezaSql = buildPiezaFilterSql(piezaFilter);
 
       const idRows = await prisma.$queryRaw<InventoryIdRow[]>(Prisma.sql`
         SELECT "id"
@@ -188,6 +224,9 @@ export async function GET(req: Request) {
         ${ownerSql}
         ${statusSql}
         ${searchSql}
+        ${marcaSql}
+        ${cocheSql}
+        ${piezaSql}
         ORDER BY "updatedAt" DESC
         OFFSET ${skip}
         LIMIT ${pageSize}
@@ -199,6 +238,9 @@ export async function GET(req: Request) {
         ${ownerSql}
         ${statusSql}
         ${searchSql}
+        ${marcaSql}
+        ${cocheSql}
+        ${piezaSql}
       `);
       const statusTotals = await getStatusTotals(ownerId);
 

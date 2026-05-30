@@ -547,6 +547,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const lastNotificationIdRef = useRef<string | null>(null);
   const searchWorkerRef = useRef<Worker | null>(null);
   const workerSearchRequestIdRef = useRef(0);
+  const inventoryPageRequestIdRef = useRef(0);
   const isMountedRef = useRef(true);
   const desktopTableContainerRef = useRef<HTMLDivElement | null>(null);
   const localEstatusInternoRef = useRef(
@@ -561,6 +562,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [workerSearching, setWorkerSearching] = useState(false);
   const [loadingPage, setLoadingPage] = useState(false);
   const [inventoryPage, setInventoryPage] = useState(1);
+  const [inventoryReloadSeq, setInventoryReloadSeq] = useState(0);
   const [tableScrollRowStart, setTableScrollRowStart] = useState(0);
   const [sectionVisibility, setSectionVisibility] = useState<Record<SectionKey, boolean>>({
     notifications: false,
@@ -577,6 +579,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const canImportInventory = canEditInventory;
   const canManageMercadoLibre = canEditInventory;
   const thumbnailsActive = THUMBNAILS_ENABLED;
+  const useServerPagination = !isManualOnly;
 
   useEffect(() => {
     const handleResize = () => {
@@ -801,79 +804,112 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     }
   };
 
-  const fetchAllInventory = useCallback(async (options?: { preserveSelection?: boolean; silent?: boolean }) => {
-    const silent = Boolean(options?.silent);
-    if (!silent) {
-      setMessage(null);
-      setLoadingPage(true);
-    }
+  const mergeIncomingWithLocalOverrides = useCallback((incoming: Item[]) => {
+    const now = Date.now();
+    return incoming.map((item) => {
+      const local = localEstatusInternoRef.current.get(item.id);
+      if (!local) return item;
+      if (now - local.updatedAt > 10 * 60 * 1000) {
+        localEstatusInternoRef.current.delete(item.id);
+        return item;
+      }
+      const currentInternal = (item.extraData?.estatus_interno ?? "").toString().trim().toUpperCase();
+      if (currentInternal === local.value) {
+        localEstatusInternoRef.current.delete(item.id);
+        return item;
+      }
+      const nextExtra: Record<string, any> = {
+        ...(item.extraData ?? {}),
+        estatus_interno: local.value || undefined
+      };
+      if (local.prestadoVendidoA !== undefined) {
+        nextExtra.prestado_vendido_a = local.prestadoVendidoA || undefined;
+      }
+      return { ...item, extraData: nextExtra };
+    });
+  }, []);
+
+  const fetchInventoryPage = useCallback(async (options: {
+    page: number;
+    search: string;
+    statusFilter: string | null;
+    marcaFilter: string;
+    cocheFilter: string;
+    piezaFilter: string;
+    preserveSelection?: boolean;
+  }) => {
+    const requestId = inventoryPageRequestIdRef.current + 1;
+    inventoryPageRequestIdRef.current = requestId;
+    setMessage(null);
+    setLoadingPage(true);
+
     try {
-      const res = await fetch("/api/inventory/all", { cache: "no-store" });
+      const params = new URLSearchParams({
+        page: String(Math.max(1, options.page)),
+        pageSize: String(INVENTORY_PAGE_BLOCK_SIZE)
+      });
+
+      const searchValue = options.search.trim();
+      if (searchValue.length) {
+        params.set("search", searchValue);
+      }
+
+      if (options.statusFilter?.trim().length) {
+        params.set("statusFilter", options.statusFilter.trim());
+      }
+      if (options.marcaFilter.trim().length) {
+        params.set("marcaFilter", options.marcaFilter.trim());
+      }
+      if (options.cocheFilter.trim().length) {
+        params.set("cocheFilter", options.cocheFilter.trim());
+      }
+      if (options.piezaFilter.trim().length) {
+        params.set("piezaFilter", options.piezaFilter.trim());
+      }
+
+      const res = await fetch(`/api/inventory?${params.toString()}`, { cache: "no-store" });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.error || "No se pudo traer todo el inventario");
+        throw new Error(data.error || "No se pudo obtener inventario");
+      }
+
+      if (inventoryPageRequestIdRef.current !== requestId) {
+        return false;
       }
 
       const incoming: Item[] = Array.isArray(data.items) ? data.items : [];
-      const now = Date.now();
-      const incomingWithLocal = incoming.map((item) => {
-        const local = localEstatusInternoRef.current.get(item.id);
-        if (!local) return item;
-        if (now - local.updatedAt > 10 * 60 * 1000) {
-          localEstatusInternoRef.current.delete(item.id);
-          return item;
-        }
-        const currentInternal = (item.extraData?.estatus_interno ?? "").toString().trim().toUpperCase();
-        if (currentInternal === local.value) {
-          localEstatusInternoRef.current.delete(item.id);
-          return item;
-        }
-        const nextExtra: Record<string, any> = {
-          ...(item.extraData ?? {}),
-          estatus_interno: local.value || undefined
-        };
-        if (local.prestadoVendidoA !== undefined) {
-          nextExtra.prestado_vendido_a = local.prestadoVendidoA || undefined;
-        }
-        return { ...item, extraData: nextExtra };
-      });
-
+      const incomingWithLocal = mergeIncomingWithLocalOverrides(incoming);
       const nextTotal = typeof data.total === "number" && data.total >= 0 ? data.total : incomingWithLocal.length;
       const nextStatusTotals = normalizeStatusTotals(data.statusTotals);
-      const skippedCount = Number.isFinite(Number(data.skippedCount)) ? Number(data.skippedCount) : 0;
+
       setItems(incomingWithLocal);
       setTotalItems(nextTotal);
       setStatusTotals(nextStatusTotals);
 
-      if (!options?.preserveSelection) {
+      if (!options.preserveSelection) {
         setSelectedIds([]);
         setFocusedRowInfo(null);
       }
 
-      if (!silent && (data.truncated || skippedCount > 0)) {
-        const missing = Math.max(0, nextTotal - incomingWithLocal.length);
-        const reason = data.truncated
-          ? "por el limite maximo permitido"
-          : "porque algunos registros tienen texto invalido";
-        setMessage(`Mostrando ${incomingWithLocal.length} registros. Faltan ${missing} ${reason}.`);
-      }
       return true;
     } catch (err: any) {
-      if (!silent) {
-        setMessage(err?.message || "No se pudo traer todo el inventario");
+      if (inventoryPageRequestIdRef.current === requestId) {
+        setMessage(err?.message || "No se pudo obtener inventario");
       }
       return false;
     } finally {
-      if (!silent) {
+      if (inventoryPageRequestIdRef.current === requestId) {
         setLoadingPage(false);
       }
     }
-  }, []);
+  }, [mergeIncomingWithLocalOverrides]);
 
   const refresh = useCallback(async () => {
     if (isManualOnly) return;
-    await fetchAllInventory({ preserveSelection: false });
-  }, [isManualOnly, fetchAllInventory]);
+    if (useServerPagination) {
+      setInventoryReloadSeq((current) => current + 1);
+    }
+  }, [isManualOnly, useServerPagination]);
 
   const deleteItems = useCallback(async (ids: string[], password?: string) => {
     if (!ids.length) return;
@@ -2699,8 +2735,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   }, [canEditInventory, inventoryEditForm, registerSoldItemInFinance]);
 
   const deferredSearch = useDeferredValue(search);
-  const normalizedSearch = deferredSearch.trim().toLowerCase();
-  const canUseWorkerSearch = !isManualOnly && items.length >= WORKER_SEARCH_MIN_ITEMS;
+  const serverSearchTerm = deferredSearch.trim();
+  const normalizedSearch = serverSearchTerm.toLowerCase();
+  const canUseWorkerSearch = !useServerPagination && items.length >= WORKER_SEARCH_MIN_ITEMS;
 
   useEffect(() => {
     const worker = searchWorkerRef.current;
@@ -2749,6 +2786,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   }, [items, normalizedSearch]);
 
   const searchFilteredItems = useMemo(() => {
+    if (useServerPagination) return items;
     if (!normalizedSearch.length) return items;
 
     if (canUseWorkerSearch) {
@@ -2762,24 +2800,49 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     }
 
     return fallbackSearchFilteredItems;
-  }, [items, normalizedSearch, canUseWorkerSearch, workerSearchResult, itemById, fallbackSearchFilteredItems]);
+  }, [items, normalizedSearch, canUseWorkerSearch, workerSearchResult, itemById, fallbackSearchFilteredItems, useServerPagination]);
 
   const workerSearchPending =
-    canUseWorkerSearch && normalizedSearch.length > 0 && (workerSearching || !workerSearchResult || workerSearchResult.query !== normalizedSearch);
+    !useServerPagination && canUseWorkerSearch && normalizedSearch.length > 0 && (workerSearching || !workerSearchResult || workerSearchResult.query !== normalizedSearch);
 
   const normalizedStatusFilter = statusFilter?.toUpperCase() ?? null;
+  const normalizedInventoryMarcaFilter = inventoryMarcaFilter.trim().toUpperCase();
+  const normalizedInventoryCocheFilter = inventoryCocheFilter.trim().toUpperCase();
+  const normalizedInventoryPiezaFilter = inventoryPiezaFilter.trim().toUpperCase();
+
+  useEffect(() => {
+    if (!useServerPagination) return;
+
+    void fetchInventoryPage({
+      page: inventoryPage,
+      search: serverSearchTerm,
+      statusFilter: normalizedStatusFilter,
+      marcaFilter: normalizedInventoryMarcaFilter,
+      cocheFilter: normalizedInventoryCocheFilter,
+      piezaFilter: normalizedInventoryPiezaFilter,
+      preserveSelection: false
+    });
+  }, [
+    fetchInventoryPage,
+    inventoryPage,
+    inventoryReloadSeq,
+    normalizedInventoryCocheFilter,
+    normalizedInventoryMarcaFilter,
+    normalizedInventoryPiezaFilter,
+    normalizedStatusFilter,
+    serverSearchTerm,
+    useServerPagination
+  ]);
+
   const statusAndSearchFilteredItems = useMemo(() => {
+    if (useServerPagination) return items;
     if (!normalizedStatusFilter) return searchFilteredItems;
     return searchFilteredItems.filter((item) => {
       const current = (item.extraData?.estatus_interno ?? "").toString().trim().toUpperCase();
       const label = current.length ? current : "SIN ESTATUS";
       return label === normalizedStatusFilter;
     });
-  }, [searchFilteredItems, normalizedStatusFilter]);
-
-  const normalizedInventoryMarcaFilter = inventoryMarcaFilter.trim().toUpperCase();
-  const normalizedInventoryCocheFilter = inventoryCocheFilter.trim().toUpperCase();
-  const normalizedInventoryPiezaFilter = inventoryPiezaFilter.trim().toUpperCase();
+  }, [items, searchFilteredItems, normalizedStatusFilter, useServerPagination]);
 
   const getInventoryFacetMarca = useCallback((item: Item) => normalizeFacetValue(item.extraData?.marca), []);
   const getInventoryFacetCoche = useCallback((item: Item) => normalizeFacetValue(item.extraData?.coche), []);
@@ -2856,27 +2919,31 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   ]);
 
   useEffect(() => {
+    if (useServerPagination) return;
     if (!inventoryMarcaFilter) return;
     if (!inventoryMarcaOptions.includes(inventoryMarcaFilter)) {
       setInventoryMarcaFilter("");
     }
-  }, [inventoryMarcaFilter, inventoryMarcaOptions]);
+  }, [inventoryMarcaFilter, inventoryMarcaOptions, useServerPagination]);
 
   useEffect(() => {
+    if (useServerPagination) return;
     if (!inventoryCocheFilter) return;
     if (!inventoryCocheOptions.includes(inventoryCocheFilter)) {
       setInventoryCocheFilter("");
     }
-  }, [inventoryCocheFilter, inventoryCocheOptions]);
+  }, [inventoryCocheFilter, inventoryCocheOptions, useServerPagination]);
 
   useEffect(() => {
+    if (useServerPagination) return;
     if (!inventoryPiezaFilter) return;
     if (!inventoryPiezaOptions.includes(inventoryPiezaFilter)) {
       setInventoryPiezaFilter("");
     }
-  }, [inventoryPiezaFilter, inventoryPiezaOptions]);
+  }, [inventoryPiezaFilter, inventoryPiezaOptions, useServerPagination]);
 
   const facetedFilteredItems = useMemo(() => {
+    if (useServerPagination) return statusAndSearchFilteredItems;
     return statusAndSearchFilteredItems.filter((item) => {
       const marcaValue = getInventoryFacetMarca(item);
       const cocheValue = getInventoryFacetCoche(item);
@@ -2895,7 +2962,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     normalizedInventoryPiezaFilter,
     getInventoryFacetMarca,
     getInventoryFacetCoche,
-    getInventoryFacetPieza
+    getInventoryFacetPieza,
+    useServerPagination
   ]);
 
   const filteredItems = useMemo(() => {
@@ -2959,8 +3027,11 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   }, [facetedFilteredItems, sortConfig, getItemPieceName, getItemYearLabel]);
 
   const filteredTotalPages = useMemo(() => {
+    if (useServerPagination) {
+      return Math.max(1, Math.ceil(totalItems / INVENTORY_PAGE_BLOCK_SIZE));
+    }
     return Math.max(1, Math.ceil(filteredItems.length / INVENTORY_PAGE_BLOCK_SIZE));
-  }, [filteredItems.length]);
+  }, [filteredItems.length, totalItems, useServerPagination]);
 
   useEffect(() => {
     setInventoryPage(1);
@@ -2969,8 +3040,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     normalizedStatusFilter,
     normalizedInventoryMarcaFilter,
     normalizedInventoryCocheFilter,
-    normalizedInventoryPiezaFilter,
-    sortConfig
+    normalizedInventoryPiezaFilter
   ]);
 
   useEffect(() => {
@@ -2979,16 +3049,17 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   }, [filteredTotalPages, inventoryPage]);
 
   const paginatedFilteredItems = useMemo(() => {
+    if (useServerPagination) return filteredItems;
     const start = (inventoryPage - 1) * INVENTORY_PAGE_BLOCK_SIZE;
     return filteredItems.slice(start, start + INVENTORY_PAGE_BLOCK_SIZE);
-  }, [filteredItems, inventoryPage]);
+  }, [filteredItems, inventoryPage, useServerPagination]);
   const shouldVirtualizeDesktop = paginatedFilteredItems.length > 120;
 
-  const paginatedVisibleStart = filteredItems.length
+  const visibleBaseTotal = useServerPagination ? totalItems : filteredItems.length;
+  const paginatedVisibleStart = visibleBaseTotal
     ? (inventoryPage - 1) * INVENTORY_PAGE_BLOCK_SIZE + 1
     : 0;
-  const paginatedVisibleEnd = Math.min(inventoryPage * INVENTORY_PAGE_BLOCK_SIZE, filteredItems.length);
-  const hasPartialInventorySnapshot = !isManualOnly && items.length < totalItems;
+  const paginatedVisibleEnd = Math.min(inventoryPage * INVENTORY_PAGE_BLOCK_SIZE, visibleBaseTotal);
 
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
 
@@ -3760,19 +3831,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                   className="w-full sm:w-64 rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm focus:border-amber-400 focus:outline-none"
                 />
                 <span className="text-xs text-slate-400">
-                  Mostrando {paginatedVisibleStart}-{paginatedVisibleEnd} de {filteredItems.length}
-                  {hasPartialInventorySnapshot ? ` (cargados de ${totalItems} total)` : ""}
+                  Mostrando {paginatedVisibleStart}-{paginatedVisibleEnd} de {useServerPagination ? totalItems : filteredItems.length}
                 </span>
-                {hasPartialInventorySnapshot && (
-                  <button
-                    type="button"
-                    onClick={() => void refresh()}
-                    disabled={loadingPage}
-                    className="rounded-md border border-slate-600 px-3 py-1 text-xs text-slate-200 hover:border-amber-300 disabled:opacity-50"
-                  >
-                    {loadingPage ? "Cargando..." : "Cargar todo"}
-                  </button>
-                )}
               </div>
               <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-4">
                 <select
@@ -3977,9 +4037,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           <p className="text-xs text-slate-400">
             {loadingPage
               ? "Cargando registros..."
-              : hasPartialInventorySnapshot
-              ? `Mostrando ${paginatedVisibleStart}-${paginatedVisibleEnd} de ${filteredItems.length} filtrados (${items.length} cargados de ${totalItems} total en sistema)`
-              : `Mostrando ${paginatedVisibleStart}-${paginatedVisibleEnd} de ${filteredItems.length} filtrados (${items.length} cargados)`}
+              : `Mostrando ${paginatedVisibleStart}-${paginatedVisibleEnd} de ${
+                  useServerPagination ? totalItems : filteredItems.length
+                } filtrados (${items.length} cargados${useServerPagination ? " en esta pagina" : ""})`}
           </p>
           {isMobile && (
           <div className="mt-4 space-y-3">
