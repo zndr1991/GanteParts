@@ -2988,6 +2988,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     ? (inventoryPage - 1) * INVENTORY_PAGE_BLOCK_SIZE + 1
     : 0;
   const paginatedVisibleEnd = Math.min(inventoryPage * INVENTORY_PAGE_BLOCK_SIZE, filteredItems.length);
+  const hasPartialInventorySnapshot = !isManualOnly && items.length < totalItems;
 
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
 
@@ -3760,7 +3761,18 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 />
                 <span className="text-xs text-slate-400">
                   Mostrando {paginatedVisibleStart}-{paginatedVisibleEnd} de {filteredItems.length}
+                  {hasPartialInventorySnapshot ? ` (cargados de ${totalItems} total)` : ""}
                 </span>
+                {hasPartialInventorySnapshot && (
+                  <button
+                    type="button"
+                    onClick={() => void refresh()}
+                    disabled={loadingPage}
+                    className="rounded-md border border-slate-600 px-3 py-1 text-xs text-slate-200 hover:border-amber-300 disabled:opacity-50"
+                  >
+                    {loadingPage ? "Cargando..." : "Cargar todo"}
+                  </button>
+                )}
               </div>
               <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-4">
                 <select
@@ -3965,6 +3977,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           <p className="text-xs text-slate-400">
             {loadingPage
               ? "Cargando registros..."
+              : hasPartialInventorySnapshot
+              ? `Mostrando ${paginatedVisibleStart}-${paginatedVisibleEnd} de ${filteredItems.length} filtrados (${items.length} cargados de ${totalItems} total en sistema)`
               : `Mostrando ${paginatedVisibleStart}-${paginatedVisibleEnd} de ${filteredItems.length} filtrados (${items.length} cargados)`}
           </p>
           {isMobile && (
