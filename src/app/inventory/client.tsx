@@ -150,6 +150,8 @@ const THUMBNAIL_PREFETCH_LIMIT = 40; // evita descargas masivas por pagina
 const THUMBNAIL_FETCH_GAP_MS = 120;
 const NOTIFICATIONS_PAGE_SIZE = 10;
 const NOTIFICATIONS_POLL_INTERVAL_MS = 20_000;
+const TABLE_OVERSCAN_ROWS = 8;
+const INVENTORY_TABLE_COLUMN_COUNT = 27;
 
 const makePhotoKey = (file: File) => `${file.name}-${file.size}-${file.lastModified}`;
 
@@ -501,6 +503,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const lastNotificationIdRef = useRef<string | null>(null);
   const fullLoadAttemptedRef = useRef(false);
   const isMountedRef = useRef(true);
+  const desktopTableContainerRef = useRef<HTMLDivElement | null>(null);
   const localEstatusInternoRef = useRef(
     new Map<string, { value: string; updatedAt: number; prestadoVendidoA?: string | null }>()
   );
@@ -510,6 +513,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     normalizeStatusTotals(initialPage.statusTotals)
   );
   const [loadingPage, setLoadingPage] = useState(false);
+  const [tableScrollTop, setTableScrollTop] = useState(0);
   const [sectionVisibility, setSectionVisibility] = useState<Record<SectionKey, boolean>>({
     notifications: false,
     manual: true,
@@ -518,6 +522,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const tableVisibleRows = 10;
   const tableRowHeight = 56;
   const tableHeaderHeight = 44;
+  const tableViewportHeight = tableVisibleRows * tableRowHeight;
   const normalizedRole = (userRole ?? "operator").toLowerCase();
   const canEditInventory = normalizedRole === "admin" || normalizedRole === "supervisor";
   const canCreateManual = canEditInventory || normalizedRole === "operator" || normalizedRole === "uploader";
@@ -775,8 +780,32 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     if (isManualOnly) return;
     if (fullLoadAttemptedRef.current) return;
     if (items.length >= totalItems) return;
-    fullLoadAttemptedRef.current = true;
-    void fetchAllInventory({ preserveSelection: false });
+
+    let cancelled = false;
+    const triggerFullLoad = () => {
+      if (cancelled || fullLoadAttemptedRef.current) return;
+      fullLoadAttemptedRef.current = true;
+      void fetchAllInventory({ preserveSelection: false });
+    };
+
+    const idleApi = window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+
+    if (typeof idleApi.requestIdleCallback === "function") {
+      const idleId = idleApi.requestIdleCallback(triggerFullLoad, { timeout: 1600 });
+      return () => {
+        cancelled = true;
+        idleApi.cancelIdleCallback?.(idleId);
+      };
+    }
+
+    const timeoutId = window.setTimeout(triggerFullLoad, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
   }, [fetchAllInventory, isManualOnly, items.length, totalItems]);
 
   const deleteItems = useCallback(async (ids: string[], password?: string) => {
@@ -2862,6 +2891,45 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     return sorted;
   }, [facetedFilteredItems, sortConfig, getItemPieceName, getItemYearLabel]);
 
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+
+  const virtualizedDesktopRows = useMemo(() => {
+    const totalRows = filteredItems.length;
+    if (!totalRows) {
+      return {
+        rows: [] as Item[],
+        topSpacerHeight: 0,
+        bottomSpacerHeight: 0
+      };
+    }
+
+    const startIndex = Math.max(0, Math.floor(tableScrollTop / tableRowHeight) - TABLE_OVERSCAN_ROWS);
+    const visibleRows = Math.ceil(tableViewportHeight / tableRowHeight) + TABLE_OVERSCAN_ROWS * 2;
+    const endIndex = Math.min(totalRows, startIndex + visibleRows);
+
+    return {
+      rows: filteredItems.slice(startIndex, endIndex),
+      topSpacerHeight: startIndex * tableRowHeight,
+      bottomSpacerHeight: Math.max(0, (totalRows - endIndex) * tableRowHeight)
+    };
+  }, [filteredItems, tableRowHeight, tableScrollTop, tableViewportHeight]);
+
+  useEffect(() => {
+    if (isMobile) return;
+    const container = desktopTableContainerRef.current;
+    if (!container) return;
+    container.scrollTop = 0;
+    setTableScrollTop(0);
+  }, [
+    isMobile,
+    normalizedSearch,
+    normalizedStatusFilter,
+    normalizedInventoryMarcaFilter,
+    normalizedInventoryCocheFilter,
+    normalizedInventoryPiezaFilter,
+    sortConfig
+  ]);
+
   const statusCounters = useMemo(() => {
     const localCounts: Record<string, number> = {};
     items.forEach((item) => {
@@ -3779,7 +3847,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
               ? "Cargando registros..."
               : `Mostrando ${items.length} de ${totalItems} registros`}
           </p>
-          <div className="mt-4 space-y-3 md:hidden">
+          {isMobile && (
+          <div className="mt-4 space-y-3">
             {filteredItems.length === 0 ? (
               <div className="rounded-2xl border border-slate-800 bg-slate-950/30 p-6 text-center text-sm text-slate-400">
                 No hay registros que coincidan con el filtro aplicado.
@@ -3791,7 +3860,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 const internalStatus = internalStatusRaw.length ? internalStatusRaw.toUpperCase() : "SIN ESTATUS";
                 const yearLabel = getItemYearLabel(item);
                 const pieceName = getItemPieceName(item);
-                const isSelected = selectedIds.includes(item.id);
+                const isSelected = selectedIdSet.has(item.id);
                 const cardStatusClass = internalStatus === "VENDIDO"
                   ? "bg-rose-950/40"
                   : internalStatus === "PRESTADO"
@@ -3946,9 +4015,13 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
               })
             )}
           </div>
+          )}
+          {!isMobile && (
           <div
-            className="mt-4 hidden overflow-auto rounded-2xl border border-slate-800 bg-slate-950/30 shadow-inner shadow-black/40 md:block"
-            style={{ maxHeight: tableHeaderHeight + tableVisibleRows * tableRowHeight }}
+            ref={desktopTableContainerRef}
+            onScroll={(event) => setTableScrollTop(event.currentTarget.scrollTop)}
+            className="mt-4 overflow-auto rounded-2xl border border-slate-800 bg-slate-950/30 shadow-inner shadow-black/40"
+            style={{ maxHeight: tableHeaderHeight + tableViewportHeight }}
           >
             {filteredItems.length === 0 ? (
               <div className="p-8 text-center text-sm text-slate-400">
@@ -4076,13 +4149,21 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredItems.map((item) => {
+                  {virtualizedDesktopRows.topSpacerHeight > 0 && (
+                    <tr aria-hidden="true">
+                      <td
+                        colSpan={INVENTORY_TABLE_COLUMN_COUNT}
+                        style={{ height: virtualizedDesktopRows.topSpacerHeight, padding: 0, border: 0 }}
+                      />
+                    </tr>
+                  )}
+                  {virtualizedDesktopRows.rows.map((item) => {
                     const extra = item.extraData ?? {};
                     const internalStatusRaw = (extra.estatus_interno ?? "").toString().trim();
                     const internalStatus = internalStatusRaw.length ? internalStatusRaw.toUpperCase() : "SIN ESTATUS";
                     const yearLabel = getItemYearLabel(item);
                     const pieceName = getItemPieceName(item);
-                    const isSelected = selectedIds.includes(item.id);
+                    const isSelected = selectedIdSet.has(item.id);
                     const isEditing = editingRowId === item.id;
                     const rowStatusClass = internalStatus === "VENDIDO"
                       ? "bg-rose-950/40"
@@ -4413,10 +4494,19 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                       </tr>
                     );
                   })}
+                  {virtualizedDesktopRows.bottomSpacerHeight > 0 && (
+                    <tr aria-hidden="true">
+                      <td
+                        colSpan={INVENTORY_TABLE_COLUMN_COUNT}
+                        style={{ height: virtualizedDesktopRows.bottomSpacerHeight, padding: 0, border: 0 }}
+                      />
+                    </tr>
+                  )}
                 </tbody>
               </table>
             )}
           </div>
+          )}
         </section>
         </>
         )}
