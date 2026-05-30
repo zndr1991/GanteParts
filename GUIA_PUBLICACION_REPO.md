@@ -14,7 +14,7 @@ Esta guia te deja un flujo claro para:
 - Remoto:
   - origin = https://github.com/zndr1991/GanteParts.git
 - Servidor:
-  - ganteparts@192.168.100.23
+  - ganteparts@192.168.100.2
 - Script de deploy en servidor:
   - /home/ganteparts/deploy.sh
 - Base local de desarrollo configurada:
@@ -163,7 +163,7 @@ git push origin main
 Con main ya actualizado en remoto, publica asi:
 
 ```powershell
-ssh ganteparts@192.168.100.23 "/home/ganteparts/deploy.sh"
+ssh ganteparts@192.168.100.2 "/home/ganteparts/deploy.sh"
 ```
 
 Que hace el script:
@@ -180,7 +180,7 @@ Que hace el script:
 ### 10.1 Verificar servicio
 
 ```powershell
-ssh ganteparts@192.168.100.23 "systemctl is-active ganteparts"
+ssh ganteparts@192.168.100.2 "systemctl is-active ganteparts"
 ```
 
 Resultado esperado:
@@ -199,7 +199,7 @@ Resultado esperado:
 ### 10.3 Ver logs rapidos si algo falla
 
 ```powershell
-ssh ganteparts@192.168.100.23 "journalctl -u ganteparts -n 120 --no-pager"
+ssh ganteparts@192.168.100.2 "journalctl -u ganteparts -n 120 --no-pager"
 ```
 
 ## 11) Rollback rapido
@@ -208,13 +208,13 @@ Si un deploy rompe algo:
 1. Ver commits recientes en servidor:
 
 ```powershell
-ssh ganteparts@192.168.100.23 "cd /home/ganteparts/PROYECTO_GANTE && git log --oneline -n 10"
+ssh ganteparts@192.168.100.2 "cd /home/ganteparts/PROYECTO_GANTE && git log --oneline -n 10"
 ```
 
 2. Regresar a commit estable (reemplaza HASH_BUENO):
 
 ```powershell
-ssh ganteparts@192.168.100.23 "cd /home/ganteparts/PROYECTO_GANTE && git checkout HASH_BUENO && npm ci && npm run build && sudo systemctl restart ganteparts"
+ssh ganteparts@192.168.100.2 "cd /home/ganteparts/PROYECTO_GANTE && git checkout HASH_BUENO && npm ci && npm run build && sudo systemctl restart ganteparts"
 ```
 
 3. Validar de nuevo HTTP 200.
@@ -334,7 +334,7 @@ Despues del deploy:
 Cuando ya hiciste merge a main:
 
 ```powershell
-ssh ganteparts@192.168.100.23 "/home/ganteparts/deploy.sh"
+ssh ganteparts@192.168.100.2 "/home/ganteparts/deploy.sh"
 ```
 
 Eso es todo para publicar de forma segura y repetible.
