@@ -15,6 +15,16 @@ const MAX_CACHE_TAKE =
     ? Math.min(Math.floor(INVENTORY_INITIAL_LOAD_ENV), MAX_INITIAL_PAGE_SIZE)
     : INVENTORY_PAGE_SIZE;
 
+type InventoryWhere = { ownerId: string } | undefined;
+
+const resolveSnapshotWhere = (ownerId: string | null): InventoryWhere => {
+  return ownerId ? { ownerId } : undefined;
+};
+
+const resolveRequestedTake = (take: number) => {
+  return Number.isFinite(take) && take > 0 ? Math.floor(take) : MAX_CACHE_TAKE;
+};
+
 type StatusCountRow = {
   label: string | null;
   count: number | bigint | string;
@@ -44,8 +54,8 @@ const getStatusTotals = async (ownerId: string | null) => {
 
 const fetchInventorySnapshot = unstable_cache(
   async (ownerId: string | null, take: number) => {
-    const where = ownerId ? { ownerId } : undefined;
-    const requested = Number.isFinite(take) && take > 0 ? Math.floor(take) : MAX_CACHE_TAKE;
+    const where = resolveSnapshotWhere(ownerId);
+    const requested = resolveRequestedTake(take);
 
     const total = await prisma.inventoryItem.count({ where });
     const statusTotals = await getStatusTotals(ownerId);
@@ -72,6 +82,33 @@ const fetchInventorySnapshot = unstable_cache(
   { revalidate: 45, tags: ["inventory-initial"] }
 );
 
+const fetchManualInventorySnapshot = unstable_cache(
+  async (ownerId: string | null, take: number) => {
+    const where = resolveSnapshotWhere(ownerId);
+    const requested = resolveRequestedTake(take);
+
+    const { items, skippedIds } = await fetchInventoryItemsSafely({
+      where,
+      take: requested
+    });
+
+    if (skippedIds.length) {
+      console.error(`Inventory manual snapshot omitio ${skippedIds.length} registros con texto invalido`);
+    }
+
+    return {
+      items: items.map((item) => serializeInventoryItem(item) as InventoryClientItem),
+      skippedCount: skippedIds.length
+    };
+  },
+  ["inventory-manual-initial"],
+  { revalidate: 45, tags: ["inventory-initial"] }
+);
+
 export const getInventorySnapshot = async (ownerId: string | null, take: number) => {
   return fetchInventorySnapshot(ownerId ?? null, take);
+};
+
+export const getManualInventorySnapshot = async (ownerId: string | null, take: number) => {
+  return fetchManualInventorySnapshot(ownerId ?? null, take);
 };

@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { auth } from "@/lib/auth";
-import { getInventorySnapshot } from "@/lib/inventory-cache";
+import { getManualInventorySnapshot } from "@/lib/inventory-cache";
 import { redirect } from "next/navigation";
 
 import { InventoryClient } from "../client";
@@ -17,7 +17,7 @@ export default async function ManualInventoryPage() {
 
   const role = (session.user.role ?? "operator").toLowerCase();
   const ownerId = role === "viewer" ? session.user.id : null;
-  const { items } = await getInventorySnapshot(ownerId, MANUAL_SUGGESTION_LIMIT);
+  const { items } = await getManualInventorySnapshot(ownerId, MANUAL_SUGGESTION_LIMIT);
   const serialized = items as InventoryClientItem[];
 
   const initialPage: InventoryInitialPage = {
