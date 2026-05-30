@@ -3,6 +3,18 @@ import { prisma } from "@/lib/prisma";
 import { INVENTORY_LIST_SELECT } from "@/lib/inventory-serialization";
 
 const SAFE_FETCH_BATCH_SIZE = 600;
+const KNOWN_BAD_ID_TTL_MS = 15 * 60 * 1000;
+const knownBadInventoryIds = new Map<string, number>();
+
+const getKnownBadIds = () => {
+  const now = Date.now();
+  for (const [id, timestamp] of knownBadInventoryIds.entries()) {
+    if (now - timestamp > KNOWN_BAD_ID_TTL_MS) {
+      knownBadInventoryIds.delete(id);
+    }
+  }
+  return Array.from(knownBadInventoryIds.keys());
+};
 
 const toErrorMessage = (error: unknown) => {
   if (!error) return "";
@@ -31,8 +43,15 @@ export const fetchInventoryItemsSafely = async ({
   where,
   take
 }: FetchInventoryItemsSafelyParams): Promise<{ items: InventoryListItem[]; skippedIds: string[] }> => {
+  const knownBadIds = getKnownBadIds();
+  const whereWithKnownBadFilter: Prisma.InventoryItemWhereInput | undefined = knownBadIds.length
+    ? where
+      ? { AND: [where, { id: { notIn: knownBadIds } }] }
+      : { id: { notIn: knownBadIds } }
+    : where;
+
   const idRows = await prisma.inventoryItem.findMany({
-    where,
+    where: whereWithKnownBadFilter,
     orderBy: { updatedAt: "desc" },
     select: { id: true },
     ...(take && take > 0 ? { take } : {})
@@ -40,10 +59,10 @@ export const fetchInventoryItemsSafely = async ({
 
   const orderedIds = idRows.map((row) => row.id);
   if (!orderedIds.length) {
-    return { items: [], skippedIds: [] };
+    return { items: [], skippedIds: knownBadIds };
   }
 
-  const skippedIds: string[] = [];
+  const skippedIds = new Set<string>(knownBadIds);
   const collected: InventoryListItem[] = [];
 
   const loadChunkSafely = async (ids: string[]): Promise<void> => {
@@ -52,7 +71,7 @@ export const fetchInventoryItemsSafely = async ({
     try {
       const rows = await prisma.inventoryItem.findMany({
         where: {
-          ...(where ?? {}),
+          ...(whereWithKnownBadFilter ?? {}),
           id: { in: ids }
         },
         select: INVENTORY_LIST_SELECT
@@ -64,7 +83,9 @@ export const fetchInventoryItemsSafely = async ({
       }
 
       if (ids.length === 1) {
-        skippedIds.push(ids[0]);
+        const badId = ids[0];
+        skippedIds.add(badId);
+        knownBadInventoryIds.set(badId, Date.now());
         return;
       }
 
@@ -86,5 +107,5 @@ export const fetchInventoryItemsSafely = async ({
     return left - right;
   });
 
-  return { items: collected, skippedIds };
+  return { items: collected, skippedIds: Array.from(skippedIds) };
 };
