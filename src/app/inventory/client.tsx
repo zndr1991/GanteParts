@@ -541,7 +541,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [inventoryEditForm, setInventoryEditForm] = useState<InventoryEditFormState | null>(null);
   const [inventoryEditError, setInventoryEditError] = useState<string | null>(null);
   const [inventoryEditSaving, setInventoryEditSaving] = useState(false);
-  const [thumbnailErrors, setThumbnailErrors] = useState<Record<string, string | null>>({});
   const [thumbnailVersionById, setThumbnailVersionById] = useState<Record<string, number>>({});
   const [mlAction, setMlAction] = useState<null | "pause" | "activate">(null);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -563,7 +562,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [workerSearching, setWorkerSearching] = useState(false);
   const [loadingPage, setLoadingPage] = useState(false);
   const [inventoryPage, setInventoryPage] = useState(1);
-  const [tableScrollTop, setTableScrollTop] = useState(0);
+  const [tableScrollRowStart, setTableScrollRowStart] = useState(0);
   const [sectionVisibility, setSectionVisibility] = useState<Record<SectionKey, boolean>>({
     notifications: false,
     manual: true,
@@ -1671,11 +1670,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         )
       );
       setThumbnailVersionById((prev) => ({ ...prev, [photoModal.id]: (prev[photoModal.id] ?? 0) + 1 }));
-      setThumbnailErrors((prev) => {
-        const next = { ...prev };
-        delete next[photoModal.id];
-        return next;
-      });
       closePhotoModal();
       setMessage("Fotos actualizadas");
     } catch (err: any) {
@@ -3037,7 +3031,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       };
     }
 
-    const startIndex = Math.max(0, Math.floor(tableScrollTop / tableRowHeight) - TABLE_OVERSCAN_ROWS);
+    const startIndex = Math.max(0, tableScrollRowStart - TABLE_OVERSCAN_ROWS);
     const visibleRows = Math.ceil(tableViewportHeight / tableRowHeight) + TABLE_OVERSCAN_ROWS * 2;
     const endIndex = Math.min(totalRows, startIndex + visibleRows);
 
@@ -3046,14 +3040,14 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       topSpacerHeight: startIndex * tableRowHeight,
       bottomSpacerHeight: Math.max(0, (totalRows - endIndex) * tableRowHeight)
     };
-  }, [paginatedFilteredItems, tableRowHeight, tableScrollTop, tableViewportHeight]);
+  }, [paginatedFilteredItems, tableRowHeight, tableScrollRowStart, tableViewportHeight]);
 
   useEffect(() => {
     if (isMobile) return;
     const container = desktopTableContainerRef.current;
     if (!container) return;
     container.scrollTop = 0;
-    setTableScrollTop(0);
+    setTableScrollRowStart(0);
   }, [
     isMobile,
     normalizedSearch,
@@ -4019,7 +4013,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 const photosCount = typeof item.photoCount === "number" ? item.photoCount : 0;
                 const previewEnabled = thumbnailsActive && photosCount > 0;
                 const previewSrc = previewEnabled ? getThumbnailSrc(item.id) : null;
-                const previewError = previewEnabled ? thumbnailErrors[item.id] : null;
 
                 return (
                   <article
@@ -4108,31 +4101,19 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                         aria-label={photosCount ? "Ver fotos" : "Sin fotos"}
                       >
                         {previewEnabled ? (
-                          !previewError ? (
+                          <>
+                            <span className="absolute inset-0 flex items-center justify-center text-slate-400">Foto</span>
                             <img
                               src={previewSrc ?? undefined}
                               alt={`Miniatura ${pieceName}`}
-                              className="h-full w-full object-cover"
+                              className="relative h-full w-full object-cover"
                               loading="lazy"
                               decoding="async"
-                              onLoad={() => {
-                                if (!thumbnailErrors[item.id]) return;
-                                setThumbnailErrors((prev) => {
-                                  const next = { ...prev };
-                                  delete next[item.id];
-                                  return next;
-                                });
-                              }}
-                              onError={() => {
-                                setThumbnailErrors((prev) => ({
-                                  ...prev,
-                                  [item.id]: prev[item.id] || "No se pudo cargar"
-                                }));
+                              onError={(event) => {
+                                event.currentTarget.style.display = "none";
                               }}
                             />
-                          ) : (
-                            <span className="text-rose-200">Err</span>
-                          )
+                          </>
                         ) : (
                           <span className="text-slate-400">Sin</span>
                         )}
@@ -4178,7 +4159,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           {!isMobile && (
           <div
             ref={desktopTableContainerRef}
-            onScroll={(event) => setTableScrollTop(event.currentTarget.scrollTop)}
+            onScroll={(event) => {
+              const nextRowStart = Math.floor(event.currentTarget.scrollTop / tableRowHeight);
+              setTableScrollRowStart((current) => (current === nextRowStart ? current : nextRowStart));
+            }}
             className="mt-4 overflow-auto rounded-2xl border border-slate-800 bg-slate-950/30 shadow-inner shadow-black/40"
             style={{ maxHeight: tableHeaderHeight + tableViewportHeight }}
           >
@@ -4335,7 +4319,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                     const mlUrl = item.mlItemId ? `https://articulo.mercadolibre.com.mx/${item.mlItemId}` : null;
                     const previewEnabled = thumbnailsActive && photosCount > 0;
                     const previewSrc = previewEnabled ? getThumbnailSrc(item.id) : null;
-                    const previewError = previewEnabled ? thumbnailErrors[item.id] : null;
                     return (
                       <tr
                         key={item.id}
@@ -4412,31 +4395,19 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                               aria-label={photosCount ? "Ver fotos" : "Sin fotos"}
                             >
                               {previewEnabled ? (
-                                !previewError ? (
+                                <>
+                                  <span className="absolute inset-0 flex items-center justify-center text-slate-400">Foto</span>
                                   <img
                                     src={previewSrc ?? undefined}
                                     alt={`Miniatura ${pieceName}`}
-                                    className="h-full w-full object-cover"
+                                    className="relative h-full w-full object-cover"
                                     loading="lazy"
                                     decoding="async"
-                                    onLoad={() => {
-                                      if (!thumbnailErrors[item.id]) return;
-                                      setThumbnailErrors((prev) => {
-                                        const next = { ...prev };
-                                        delete next[item.id];
-                                        return next;
-                                      });
-                                    }}
-                                    onError={() => {
-                                      setThumbnailErrors((prev) => ({
-                                        ...prev,
-                                        [item.id]: prev[item.id] || "No se pudo cargar"
-                                      }));
+                                    onError={(event) => {
+                                      event.currentTarget.style.display = "none";
                                     }}
                                   />
-                                ) : (
-                                  <span className="text-rose-200">Error</span>
-                                )
+                                </>
                               ) : (
                                 <span className="text-slate-400">{photosCount ? "Ver" : "Sin"}</span>
                               )}
