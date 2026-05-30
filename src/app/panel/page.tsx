@@ -3,6 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { auth } from "@/lib/auth";
+import { PanelRoutePrefetch } from "@/components/panel-route-prefetch";
 
 type Shortcut = {
   href: Route;
@@ -54,6 +55,7 @@ export default async function PanelPage() {
 
   return (
     <main className="min-h-screen bg-slate-950 px-4 py-10 text-slate-100">
+      <PanelRoutePrefetch routes={shortcuts.map((shortcut) => shortcut.href)} />
       <div className="mx-auto flex max-w-4xl flex-col gap-8">
         <section className="rounded-3xl border border-slate-800 bg-gradient-to-br from-slate-900/80 to-slate-900/30 p-8 shadow-xl">
           <p className="text-xs uppercase tracking-[0.4em] text-amber-400">Panel principal</p>
