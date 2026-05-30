@@ -5,7 +5,7 @@ import { serializeInventoryItem } from "@/lib/inventory-serialization";
 import { Prisma } from "@prisma/client";
 import { fetchInventoryItemsSafely } from "@/lib/inventory-safe-load";
 
-const INVENTORY_PAGE_SIZE = 450;
+const INVENTORY_PAGE_SIZE = 120;
 const MAX_INITIAL_PAGE_SIZE = 5000;
 const INVENTORY_INITIAL_LOAD_ENV = Number(
   process.env.INVENTORY_INITIAL_LOAD_LIMIT ?? process.env.INVENTORY_FULL_LOAD_LIMIT ?? `${INVENTORY_PAGE_SIZE}`
