@@ -164,8 +164,6 @@ const MAX_PHOTO_DIMENSION = 1280; // ancho/alto maximo al comprimir
 const PHOTO_QUALITY = 0.8; // calidad JPEG al recomprimir
 const drawingColors = ["#f87171", "#facc15", "#4ade80", "#38bdf8", "#f472b6", "#ffffff"];
 const THUMBNAILS_ENABLED = true;
-const THUMBNAIL_PREFETCH_LIMIT = 0; // 0 desactiva prefetch al entrar; solo carga por hover/click
-const THUMBNAIL_FETCH_GAP_MS = 120;
 const NOTIFICATIONS_PAGE_SIZE = 10;
 const NOTIFICATIONS_POLL_INTERVAL_MS = 20_000;
 const TABLE_OVERSCAN_ROWS = 8;
@@ -543,9 +541,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [inventoryEditForm, setInventoryEditForm] = useState<InventoryEditFormState | null>(null);
   const [inventoryEditError, setInventoryEditError] = useState<string | null>(null);
   const [inventoryEditSaving, setInventoryEditSaving] = useState(false);
-  const [thumbnailCache, setThumbnailCache] = useState<Record<string, string | null>>({});
-  const [thumbnailLoadingIds, setThumbnailLoadingIds] = useState<Record<string, boolean>>({});
   const [thumbnailErrors, setThumbnailErrors] = useState<Record<string, string | null>>({});
+  const [thumbnailVersionById, setThumbnailVersionById] = useState<Record<string, number>>({});
   const [mlAction, setMlAction] = useState<null | "pause" | "activate">(null);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastNotificationIdRef = useRef<string | null>(null);
@@ -806,9 +803,12 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     }
   };
 
-  const fetchAllInventory = useCallback(async (options?: { preserveSelection?: boolean }) => {
-    setMessage(null);
-    setLoadingPage(true);
+  const fetchAllInventory = useCallback(async (options?: { preserveSelection?: boolean; silent?: boolean }) => {
+    const silent = Boolean(options?.silent);
+    if (!silent) {
+      setMessage(null);
+      setLoadingPage(true);
+    }
     try {
       const res = await fetch("/api/inventory/all", { cache: "no-store" });
       const data = await res.json().catch(() => ({}));
@@ -852,7 +852,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         setFocusedRowInfo(null);
       }
 
-      if (data.truncated || skippedCount > 0) {
+      if (!silent && (data.truncated || skippedCount > 0)) {
         const missing = Math.max(0, nextTotal - incomingWithLocal.length);
         const reason = data.truncated
           ? "por el limite maximo permitido"
@@ -860,9 +860,13 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         setMessage(`Mostrando ${incomingWithLocal.length} registros. Faltan ${missing} ${reason}.`);
       }
     } catch (err: any) {
-      setMessage(err?.message || "No se pudo traer todo el inventario");
+      if (!silent) {
+        setMessage(err?.message || "No se pudo traer todo el inventario");
+      }
     } finally {
-      setLoadingPage(false);
+      if (!silent) {
+        setLoadingPage(false);
+      }
     }
   }, []);
 
@@ -880,7 +884,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     const triggerFullLoad = () => {
       if (cancelled || fullLoadAttemptedRef.current) return;
       fullLoadAttemptedRef.current = true;
-      void fetchAllInventory({ preserveSelection: false });
+      void fetchAllInventory({ preserveSelection: false, silent: true });
     };
 
     const idleApi = window as Window & {
@@ -1546,35 +1550,14 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     }
   }, []);
 
-  const ensureThumbnail = useCallback(
-    async (itemId: string) => {
-      if (thumbnailCache[itemId] !== undefined || thumbnailLoadingIds[itemId]) return;
-      setThumbnailLoadingIds((prev) => ({ ...prev, [itemId]: true }));
-      try {
-        const res = await fetch(`/api/inventory/${itemId}/photos?limit=1`, { cache: "no-store" });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(data.error || "No se pudo obtener la miniatura");
-        }
-        const preview = Array.isArray(data.photos) ? data.photos[0] ?? null : null;
-        setThumbnailCache((prev) => ({ ...prev, [itemId]: preview }));
-        setThumbnailErrors((prev) => {
-          const next = { ...prev };
-          delete next[itemId];
-          return next;
-        });
-      } catch (err: any) {
-        setThumbnailErrors((prev) => ({ ...prev, [itemId]: err?.message || "No se pudo cargar" }));
-        setThumbnailCache((prev) => ({ ...prev, [itemId]: null }));
-      } finally {
-        setThumbnailLoadingIds((prev) => {
-          const next = { ...prev };
-          delete next[itemId];
-          return next;
-        });
-      }
+  const getThumbnailSrc = useCallback(
+    (itemId: string) => {
+      const version = thumbnailVersionById[itemId] ?? 0;
+      return version > 0
+        ? `/api/inventory/${itemId}/thumbnail?v=${version}`
+        : `/api/inventory/${itemId}/thumbnail`;
     },
-    [thumbnailCache, thumbnailLoadingIds]
+    [thumbnailVersionById]
   );
 
   const handleModalFileSelection = async (fileList: FileList | null) => {
@@ -1687,7 +1670,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           item.id === photoModal.id ? { ...item, photoCount: photosToSave.length } : item
         )
       );
-      setThumbnailCache((prev) => ({ ...prev, [photoModal.id]: photosToSave[0] ?? null }));
+      setThumbnailVersionById((prev) => ({ ...prev, [photoModal.id]: (prev[photoModal.id] ?? 0) + 1 }));
       setThumbnailErrors((prev) => {
         const next = { ...prev };
         delete next[photoModal.id];
@@ -3099,46 +3082,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     });
   }, [items, statusTotals, totalItems]);
 
-  useEffect(() => {
-    if (!thumbnailsActive) return;
-    if (THUMBNAIL_PREFETCH_LIMIT <= 0) return;
-    const prioritizedItems = isMobile
-      ? paginatedFilteredItems.slice(0, Math.min(THUMBNAIL_PREFETCH_LIMIT, 24))
-      : virtualizedDesktopRows.rows;
-
-    const queue = prioritizedItems
-      .filter((item) => (item.photoCount ?? 0) > 0)
-      .map((item) => item.id)
-      .filter((id) => thumbnailCache[id] === undefined && !thumbnailLoadingIds[id]);
-
-    if (!queue.length) return;
-
-    let cancelled = false;
-
-    const processQueue = async () => {
-      for (const id of queue) {
-        if (cancelled) break;
-        await ensureThumbnail(id);
-        if (cancelled) break;
-        await new Promise((resolve) => setTimeout(resolve, THUMBNAIL_FETCH_GAP_MS));
-      }
-    };
-
-    processQueue();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    thumbnailsActive,
-    paginatedFilteredItems,
-    virtualizedDesktopRows.rows,
-    isMobile,
-    ensureThumbnail,
-    thumbnailCache,
-    thumbnailLoadingIds
-  ]);
-
   return (
     <>
       {!isManualOnly && toastNotification && (
@@ -4075,8 +4018,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                   : "";
                 const photosCount = typeof item.photoCount === "number" ? item.photoCount : 0;
                 const previewEnabled = thumbnailsActive && photosCount > 0;
-                const previewSrc = previewEnabled ? thumbnailCache[item.id] : null;
-                const previewLoading = previewEnabled && Boolean(thumbnailLoadingIds[item.id]);
+                const previewSrc = previewEnabled ? getThumbnailSrc(item.id) : null;
                 const previewError = previewEnabled ? thumbnailErrors[item.id] : null;
 
                 return (
@@ -4158,36 +4100,38 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                         }`}
                         onClick={(event) => {
                           event.stopPropagation();
-                          if (previewEnabled && !previewSrc && !previewLoading) {
-                            void ensureThumbnail(item.id);
-                          }
                           if (canEditInventory) {
                             openPhotoModal(item);
-                          }
-                        }}
-                        onTouchStart={() => {
-                          if (previewEnabled && !previewSrc && !previewLoading) {
-                            void ensureThumbnail(item.id);
                           }
                         }}
                         disabled={!canEditInventory}
                         aria-label={photosCount ? "Ver fotos" : "Sin fotos"}
                       >
                         {previewEnabled ? (
-                          previewSrc ? (
+                          !previewError ? (
                             <img
-                              src={previewSrc}
+                              src={previewSrc ?? undefined}
                               alt={`Miniatura ${pieceName}`}
                               className="h-full w-full object-cover"
                               loading="lazy"
                               decoding="async"
+                              onLoad={() => {
+                                if (!thumbnailErrors[item.id]) return;
+                                setThumbnailErrors((prev) => {
+                                  const next = { ...prev };
+                                  delete next[item.id];
+                                  return next;
+                                });
+                              }}
+                              onError={() => {
+                                setThumbnailErrors((prev) => ({
+                                  ...prev,
+                                  [item.id]: prev[item.id] || "No se pudo cargar"
+                                }));
+                              }}
                             />
-                          ) : previewLoading ? (
-                            <span className="text-amber-200">...</span>
-                          ) : previewError ? (
-                            <span className="text-rose-200">Err</span>
                           ) : (
-                            <span className="text-slate-400">Foto</span>
+                            <span className="text-rose-200">Err</span>
                           )
                         ) : (
                           <span className="text-slate-400">Sin</span>
@@ -4390,8 +4334,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                     const photosCount = typeof item.photoCount === "number" ? item.photoCount : 0;
                     const mlUrl = item.mlItemId ? `https://articulo.mercadolibre.com.mx/${item.mlItemId}` : null;
                     const previewEnabled = thumbnailsActive && photosCount > 0;
-                    const previewSrc = previewEnabled ? thumbnailCache[item.id] : null;
-                    const previewLoading = previewEnabled && Boolean(thumbnailLoadingIds[item.id]);
+                    const previewSrc = previewEnabled ? getThumbnailSrc(item.id) : null;
                     const previewError = previewEnabled ? thumbnailErrors[item.id] : null;
                     return (
                       <tr
@@ -4461,37 +4404,38 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                               }`}
                               onClick={(event) => {
                                 event.stopPropagation();
-                                if (previewEnabled && !previewSrc && !previewLoading) {
-                                  void ensureThumbnail(item.id);
-                                }
                                 if (canEditInventory) {
                                   openPhotoModal(item);
                                 }
-                              }}
-                              onMouseEnter={() => {
-                                if (previewEnabled) ensureThumbnail(item.id);
-                              }}
-                              onFocus={() => {
-                                if (previewEnabled) ensureThumbnail(item.id);
                               }}
                               disabled={!canEditInventory}
                               aria-label={photosCount ? "Ver fotos" : "Sin fotos"}
                             >
                               {previewEnabled ? (
-                                previewSrc ? (
+                                !previewError ? (
                                   <img
-                                    src={previewSrc}
+                                    src={previewSrc ?? undefined}
                                     alt={`Miniatura ${pieceName}`}
                                     className="h-full w-full object-cover"
                                     loading="lazy"
                                     decoding="async"
+                                    onLoad={() => {
+                                      if (!thumbnailErrors[item.id]) return;
+                                      setThumbnailErrors((prev) => {
+                                        const next = { ...prev };
+                                        delete next[item.id];
+                                        return next;
+                                      });
+                                    }}
+                                    onError={() => {
+                                      setThumbnailErrors((prev) => ({
+                                        ...prev,
+                                        [item.id]: prev[item.id] || "No se pudo cargar"
+                                      }));
+                                    }}
                                   />
-                                ) : previewLoading ? (
-                                  <span className="text-amber-200">Cargando...</span>
-                                ) : previewError ? (
-                                  <span className="text-rose-200">Error</span>
                                 ) : (
-                                  <span className="text-slate-400">Pendiente</span>
+                                  <span className="text-rose-200">Error</span>
                                 )
                               ) : (
                                 <span className="text-slate-400">{photosCount ? "Ver" : "Sin"}</span>
