@@ -744,50 +744,73 @@ export function FinanceClient({ userRole }: FinanceClientProps) {
               </article>
             </div>
 
-            <form className="grid grid-cols-1 gap-2 rounded-xl border border-slate-700 bg-slate-950/40 p-3 md:grid-cols-5" onSubmit={submitDebt}>
-              <input
-                type="text"
-                placeholder="A quien se le debe"
-                value={debtForm.creditorName}
-                onChange={(event) => setDebtForm((current) => ({ ...current, creditorName: event.target.value }))}
-                className="rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
-                disabled={!canManage || submitting}
-                required
-              />
-              <input
-                type="text"
-                placeholder="Concepto"
-                value={debtForm.concept}
-                onChange={(event) => setDebtForm((current) => ({ ...current, concept: event.target.value }))}
-                className="rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm md:col-span-2"
-                disabled={!canManage || submitting}
-                required
-              />
-              <input
-                type="text"
-                placeholder="Monto inicial"
-                value={debtForm.amount}
-                onChange={(event) => setDebtForm((current) => ({ ...current, amount: event.target.value }))}
-                className="rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
-                disabled={!canManage || submitting}
-                required
-              />
-              <div className="flex gap-2">
-                <input
-                  type="date"
-                  value={debtForm.date}
-                  onChange={(event) => setDebtForm((current) => ({ ...current, date: event.target.value }))}
-                  className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
-                  disabled={!canManage || submitting}
-                  required
-                />
-                <button
-                  type="submit"
-                  disabled={!canManage || submitting}
-                  className="rounded-md border border-amber-400/50 bg-amber-500/10 px-3 py-2 text-sm font-semibold text-amber-100 hover:bg-amber-500/20 disabled:opacity-50"
-                >
-                  Crear
-                </button>
+            <form className="rounded-xl border border-slate-700 bg-slate-950/40 p-4" onSubmit={submitDebt}>
+              <div className="mb-3">
+                <p className="text-xs uppercase tracking-wide text-slate-400">Nueva deuda</p>
+                <p className="text-xs text-slate-500">Registra a quien se le debe y el monto inicial.</p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-6">
+                <label className="space-y-1 md:col-span-2">
+                  <span className="text-[11px] uppercase tracking-wide text-slate-400">A quien se le debe</span>
+                  <input
+                    type="text"
+                    placeholder="Ej. Proveedor Lopez"
+                    value={debtForm.creditorName}
+                    onChange={(event) => setDebtForm((current) => ({ ...current, creditorName: event.target.value }))}
+                    className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                    disabled={!canManage || submitting}
+                    required
+                  />
+                </label>
+
+                <label className="space-y-1 md:col-span-2">
+                  <span className="text-[11px] uppercase tracking-wide text-slate-400">Concepto</span>
+                  <input
+                    type="text"
+                    placeholder="Descripcion de la deuda"
+                    value={debtForm.concept}
+                    onChange={(event) => setDebtForm((current) => ({ ...current, concept: event.target.value }))}
+                    className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                    disabled={!canManage || submitting}
+                    required
+                  />
+                </label>
+
+                <label className="space-y-1">
+                  <span className="text-[11px] uppercase tracking-wide text-slate-400">Monto inicial</span>
+                  <input
+                    type="text"
+                    placeholder="0.00"
+                    value={debtForm.amount}
+                    onChange={(event) => setDebtForm((current) => ({ ...current, amount: event.target.value }))}
+                    className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                    disabled={!canManage || submitting}
+                    required
+                  />
+                </label>
+
+                <label className="space-y-1">
+                  <span className="text-[11px] uppercase tracking-wide text-slate-400">Fecha</span>
+                  <input
+                    type="date"
+                    value={debtForm.date}
+                    onChange={(event) => setDebtForm((current) => ({ ...current, date: event.target.value }))}
+                    className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                    disabled={!canManage || submitting}
+                    required
+                  />
+                </label>
+
+                <div className="md:col-span-6 flex justify-end">
+                  <button
+                    type="submit"
+                    disabled={!canManage || submitting}
+                    className="rounded-md border border-amber-400/50 bg-amber-500/10 px-4 py-2 text-sm font-semibold text-amber-100 hover:bg-amber-500/20 disabled:opacity-50"
+                  >
+                    Crear deuda
+                  </button>
+                </div>
               </div>
             </form>
 
@@ -802,182 +825,265 @@ export function FinanceClient({ userRole }: FinanceClientProps) {
                     } satisfies DebtMovementDrafts);
 
                   return (
-                    <article key={debt.id} className="rounded-xl border border-slate-700 bg-slate-950/40 p-4 space-y-4">
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                        <div>
-                          <h3 className="text-lg font-semibold text-slate-100">{debt.creditorName}</h3>
-                          <p className="text-sm text-slate-300">{debt.concept}</p>
-                          <p className="text-xs text-slate-500">Creada: {new Date(debt.createdAt).toLocaleString("es-MX")}</p>
-                        </div>
-                        {canManage && (
-                          <button
-                            type="button"
-                            onClick={() => void deleteDebt(debt.id)}
-                            disabled={submitting}
-                            className="rounded-md border border-rose-400/40 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-rose-200 hover:bg-rose-500/10 disabled:opacity-50"
-                          >
-                            Eliminar deuda
-                          </button>
-                        )}
-                      </div>
+                    <article key={debt.id} className="rounded-2xl border border-slate-700 bg-slate-950/50 p-4 md:p-5 space-y-4">
+                      {(() => {
+                        const debtStatus =
+                          debt.balance > 0 ? "Pendiente" : debt.balance < 0 ? "Saldo a favor" : "Liquidada";
+                        const debtStatusClass =
+                          debt.balance > 0
+                            ? "border-rose-400/50 text-rose-200"
+                            : debt.balance < 0
+                              ? "border-emerald-400/50 text-emerald-200"
+                              : "border-slate-500/60 text-slate-200";
 
-                      <div className="grid gap-2 sm:grid-cols-3">
-                        <div className="rounded-md border border-amber-400/30 bg-amber-500/10 px-3 py-2">
-                          <p className="text-[11px] uppercase tracking-wide text-amber-200">Cargos</p>
-                          <p className="text-lg font-semibold text-amber-100">{formatMoney(debt.totalCharge)}</p>
-                        </div>
-                        <div className="rounded-md border border-emerald-400/30 bg-emerald-500/10 px-3 py-2">
-                          <p className="text-[11px] uppercase tracking-wide text-emerald-200">Abonos</p>
-                          <p className="text-lg font-semibold text-emerald-100">{formatMoney(debt.totalPayment)}</p>
-                        </div>
-                        <div className="rounded-md border border-rose-400/30 bg-rose-500/10 px-3 py-2">
-                          <p className="text-[11px] uppercase tracking-wide text-rose-200">Saldo</p>
-                          <p className="text-lg font-semibold text-rose-100">{formatMoney(debt.balance)}</p>
-                        </div>
-                      </div>
+                        let runningBalance = debt.balance;
+                        const movementRows = debt.movements.map((movement) => {
+                          const balanceAfterMovement = runningBalance;
+                          runningBalance += movement.type === "payment" ? movement.amount : -movement.amount;
+                          return {
+                            movement,
+                            balanceAfterMovement
+                          };
+                        });
 
-                      {canManage && (
-                        <div className="grid gap-3 lg:grid-cols-2">
-                          <div className="rounded-md border border-slate-700 bg-slate-900/70 p-3 space-y-2">
-                            <p className="text-xs font-semibold uppercase tracking-wide text-emerald-200">Agregar abono</p>
-                            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                              <input
-                                type="text"
-                                placeholder="Concepto"
-                                value={drafts.payment.concept}
-                                onChange={(event) =>
-                                  setMovementDraftField(debt.id, "payment", "concept", event.target.value)
-                                }
-                                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs sm:col-span-2"
-                              />
-                              <input
-                                type="text"
-                                placeholder="Monto"
-                                value={drafts.payment.amount}
-                                onChange={(event) =>
-                                  setMovementDraftField(debt.id, "payment", "amount", event.target.value)
-                                }
-                                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs"
-                              />
-                              <input
-                                type="date"
-                                value={drafts.payment.date}
-                                onChange={(event) =>
-                                  setMovementDraftField(debt.id, "payment", "date", event.target.value)
-                                }
-                                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => void submitDebtMovement(debt.id, "payment")}
-                                disabled={submitting}
-                                className="rounded-md border border-emerald-400/50 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-100 hover:bg-emerald-500/20 disabled:opacity-50 sm:col-span-2"
-                              >
-                                Guardar abono
-                              </button>
+                        return (
+                          <>
+                            <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                              <div>
+                                <p className="text-[11px] uppercase tracking-wide text-slate-400">Deuda</p>
+                                <h3 className="text-xl font-semibold text-slate-100">{debt.creditorName}</h3>
+                                <p className="text-sm text-slate-300">{debt.concept}</p>
+                                <p className="text-xs text-slate-500">Creada: {new Date(debt.createdAt).toLocaleString("es-MX")}</p>
+                              </div>
+
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span
+                                  className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-wide ${debtStatusClass}`}
+                                >
+                                  {debtStatus}
+                                </span>
+                                <span className="rounded-full border border-slate-600/70 px-3 py-1 text-[11px] uppercase tracking-wide text-slate-300">
+                                  {debt.movements.length} movimientos
+                                </span>
+                                {canManage && (
+                                  <button
+                                    type="button"
+                                    onClick={() => void deleteDebt(debt.id)}
+                                    disabled={submitting}
+                                    className="rounded-md border border-rose-400/40 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-rose-200 hover:bg-rose-500/10 disabled:opacity-50"
+                                  >
+                                    Eliminar deuda
+                                  </button>
+                                )}
+                              </div>
                             </div>
-                          </div>
 
-                          <div className="rounded-md border border-slate-700 bg-slate-900/70 p-3 space-y-2">
-                            <p className="text-xs font-semibold uppercase tracking-wide text-amber-200">Agregar cargo</p>
-                            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                              <input
-                                type="text"
-                                placeholder="Concepto"
-                                value={drafts.charge.concept}
-                                onChange={(event) => setMovementDraftField(debt.id, "charge", "concept", event.target.value)}
-                                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs sm:col-span-2"
-                              />
-                              <input
-                                type="text"
-                                placeholder="Monto"
-                                value={drafts.charge.amount}
-                                onChange={(event) => setMovementDraftField(debt.id, "charge", "amount", event.target.value)}
-                                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs"
-                              />
-                              <input
-                                type="date"
-                                value={drafts.charge.date}
-                                onChange={(event) => setMovementDraftField(debt.id, "charge", "date", event.target.value)}
-                                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => void submitDebtMovement(debt.id, "charge")}
-                                disabled={submitting}
-                                className="rounded-md border border-amber-400/50 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-100 hover:bg-amber-500/20 disabled:opacity-50 sm:col-span-2"
-                              >
-                                Guardar cargo
-                              </button>
+                            <div className="grid gap-3 sm:grid-cols-3">
+                              <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2.5">
+                                <p className="text-[11px] uppercase tracking-wide text-amber-200">Total cargos</p>
+                                <p className="text-lg font-semibold text-amber-100">{formatMoney(debt.totalCharge)}</p>
+                              </div>
+                              <div className="rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-3 py-2.5">
+                                <p className="text-[11px] uppercase tracking-wide text-emerald-200">Total abonos</p>
+                                <p className="text-lg font-semibold text-emerald-100">{formatMoney(debt.totalPayment)}</p>
+                              </div>
+                              <div className="rounded-lg border border-rose-400/30 bg-rose-500/10 px-3 py-2.5">
+                                <p className="text-[11px] uppercase tracking-wide text-rose-200">Saldo actual</p>
+                                <p className="text-lg font-semibold text-rose-100">{formatMoney(debt.balance)}</p>
+                              </div>
                             </div>
-                          </div>
-                        </div>
-                      )}
 
-                      <div className="overflow-x-auto rounded-lg border border-slate-800">
-                        <table className="min-w-[640px] w-full border-collapse text-xs">
-                          <thead className="bg-slate-900/80 text-left uppercase tracking-wide text-slate-400">
-                            <tr>
-                              <th className="px-3 py-2">Fecha</th>
-                              <th className="px-3 py-2">Tipo</th>
-                              <th className="px-3 py-2">Concepto</th>
-                              <th className="px-3 py-2 text-right">Monto</th>
-                              <th className="px-3 py-2 text-right">Acciones</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {debt.movements.length ? (
-                              debt.movements.map((movement) => (
-                                <tr key={movement.id} className="border-t border-slate-800 text-slate-200">
-                                  <td className="px-3 py-2">{formatDateLabel(movement.date)}</td>
-                                  <td className="px-3 py-2">
-                                    <span
-                                      className={`rounded-full border px-2 py-0.5 text-[10px] ${
-                                        movement.type === "payment"
-                                          ? "border-emerald-400/50 text-emerald-200"
-                                          : "border-amber-400/50 text-amber-200"
-                                      }`}
-                                    >
-                                      {movement.type === "payment" ? "Abono" : "Cargo"}
-                                    </span>
-                                  </td>
-                                  <td className="px-3 py-2">{movement.concept}</td>
-                                  <td className="px-3 py-2 text-right font-semibold">
-                                    <span
-                                      className={
-                                        movement.type === "payment" ? "text-emerald-200" : "text-amber-200"
-                                      }
-                                    >
-                                      {movement.type === "payment" ? "-" : "+"}
-                                      {formatMoney(movement.amount)}
-                                    </span>
-                                  </td>
-                                  <td className="px-3 py-2 text-right">
-                                    {canManage ? (
+                            {canManage && (
+                              <div className="grid gap-3 xl:grid-cols-2">
+                                <div className="rounded-lg border border-emerald-400/20 bg-emerald-950/10 p-3">
+                                  <div className="mb-3">
+                                    <p className="text-xs font-semibold uppercase tracking-wide text-emerald-200">Registrar abono</p>
+                                    <p className="text-[11px] text-slate-400">Reduce el saldo de esta deuda.</p>
+                                  </div>
+
+                                  <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
+                                    <label className="space-y-1 md:col-span-2">
+                                      <span className="text-[11px] uppercase tracking-wide text-slate-400">Concepto</span>
+                                      <input
+                                        type="text"
+                                        placeholder="Ej. Abono parcial"
+                                        value={drafts.payment.concept}
+                                        onChange={(event) =>
+                                          setMovementDraftField(debt.id, "payment", "concept", event.target.value)
+                                        }
+                                        className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs"
+                                        disabled={submitting}
+                                      />
+                                    </label>
+
+                                    <label className="space-y-1">
+                                      <span className="text-[11px] uppercase tracking-wide text-slate-400">Monto</span>
+                                      <input
+                                        type="text"
+                                        placeholder="0.00"
+                                        value={drafts.payment.amount}
+                                        onChange={(event) =>
+                                          setMovementDraftField(debt.id, "payment", "amount", event.target.value)
+                                        }
+                                        className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs"
+                                        disabled={submitting}
+                                      />
+                                    </label>
+
+                                    <label className="space-y-1">
+                                      <span className="text-[11px] uppercase tracking-wide text-slate-400">Fecha</span>
+                                      <input
+                                        type="date"
+                                        value={drafts.payment.date}
+                                        onChange={(event) =>
+                                          setMovementDraftField(debt.id, "payment", "date", event.target.value)
+                                        }
+                                        className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs"
+                                        disabled={submitting}
+                                      />
+                                    </label>
+
+                                    <div className="md:col-span-4 flex justify-end">
                                       <button
                                         type="button"
-                                        onClick={() => void deleteDebtMovement(movement.id)}
+                                        onClick={() => void submitDebtMovement(debt.id, "payment")}
                                         disabled={submitting}
-                                        className="rounded-md border border-rose-400/40 px-2 py-1 text-[10px] text-rose-200 hover:bg-rose-500/10 disabled:opacity-50"
+                                        className="rounded-md border border-emerald-400/50 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-100 hover:bg-emerald-500/20 disabled:opacity-50"
                                       >
-                                        Quitar
+                                        Guardar abono
                                       </button>
-                                    ) : (
-                                      <span className="text-[10px] text-slate-500">Solo lectura</span>
-                                    )}
-                                  </td>
-                                </tr>
-                              ))
-                            ) : (
-                              <tr>
-                                <td className="px-3 py-4 text-center text-slate-400" colSpan={5}>
-                                  Esta deuda no tiene movimientos.
-                                </td>
-                              </tr>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <div className="rounded-lg border border-amber-400/20 bg-amber-950/10 p-3">
+                                  <div className="mb-3">
+                                    <p className="text-xs font-semibold uppercase tracking-wide text-amber-200">Registrar cargo</p>
+                                    <p className="text-[11px] text-slate-400">Incrementa el saldo de esta deuda.</p>
+                                  </div>
+
+                                  <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
+                                    <label className="space-y-1 md:col-span-2">
+                                      <span className="text-[11px] uppercase tracking-wide text-slate-400">Concepto</span>
+                                      <input
+                                        type="text"
+                                        placeholder="Ej. Cargo adicional"
+                                        value={drafts.charge.concept}
+                                        onChange={(event) => setMovementDraftField(debt.id, "charge", "concept", event.target.value)}
+                                        className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs"
+                                        disabled={submitting}
+                                      />
+                                    </label>
+
+                                    <label className="space-y-1">
+                                      <span className="text-[11px] uppercase tracking-wide text-slate-400">Monto</span>
+                                      <input
+                                        type="text"
+                                        placeholder="0.00"
+                                        value={drafts.charge.amount}
+                                        onChange={(event) => setMovementDraftField(debt.id, "charge", "amount", event.target.value)}
+                                        className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs"
+                                        disabled={submitting}
+                                      />
+                                    </label>
+
+                                    <label className="space-y-1">
+                                      <span className="text-[11px] uppercase tracking-wide text-slate-400">Fecha</span>
+                                      <input
+                                        type="date"
+                                        value={drafts.charge.date}
+                                        onChange={(event) => setMovementDraftField(debt.id, "charge", "date", event.target.value)}
+                                        className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs"
+                                        disabled={submitting}
+                                      />
+                                    </label>
+
+                                    <div className="md:col-span-4 flex justify-end">
+                                      <button
+                                        type="button"
+                                        onClick={() => void submitDebtMovement(debt.id, "charge")}
+                                        disabled={submitting}
+                                        className="rounded-md border border-amber-400/50 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-100 hover:bg-amber-500/20 disabled:opacity-50"
+                                      >
+                                        Guardar cargo
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
                             )}
-                          </tbody>
-                        </table>
-                      </div>
+
+                            <div className="rounded-lg border border-slate-800 bg-slate-950/40">
+                              <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2">
+                                <p className="text-[11px] uppercase tracking-wide text-slate-400">Historial de movimientos</p>
+                                <p className="text-[11px] text-slate-500">Mas reciente primero</p>
+                              </div>
+
+                              <div className="overflow-x-auto">
+                                <table className="min-w-[760px] w-full border-collapse text-xs">
+                                  <thead className="bg-slate-900/80 text-left uppercase tracking-wide text-slate-400">
+                                    <tr>
+                                      <th className="px-3 py-2">Fecha</th>
+                                      <th className="px-3 py-2">Concepto</th>
+                                      <th className="px-3 py-2 text-right">Abono</th>
+                                      <th className="px-3 py-2 text-right">Cargo</th>
+                                      <th className="px-3 py-2 text-right">Saldo</th>
+                                      <th className="px-3 py-2 text-right">Acciones</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {movementRows.length ? (
+                                      movementRows.map(({ movement, balanceAfterMovement }) => (
+                                        <tr key={movement.id} className="border-t border-slate-800 text-slate-200">
+                                          <td className="px-3 py-2">{formatDateLabel(movement.date)}</td>
+                                          <td className="px-3 py-2">{movement.concept}</td>
+                                          <td className="px-3 py-2 text-right font-semibold text-emerald-200">
+                                            {movement.type === "payment" ? `-${formatMoney(movement.amount)}` : "-"}
+                                          </td>
+                                          <td className="px-3 py-2 text-right font-semibold text-amber-200">
+                                            {movement.type === "charge" ? `+${formatMoney(movement.amount)}` : "-"}
+                                          </td>
+                                          <td
+                                            className={`px-3 py-2 text-right font-semibold ${
+                                              balanceAfterMovement > 0
+                                                ? "text-rose-200"
+                                                : balanceAfterMovement < 0
+                                                  ? "text-emerald-200"
+                                                  : "text-slate-200"
+                                            }`}
+                                          >
+                                            {formatMoney(balanceAfterMovement)}
+                                          </td>
+                                          <td className="px-3 py-2 text-right">
+                                            {canManage ? (
+                                              <button
+                                                type="button"
+                                                onClick={() => void deleteDebtMovement(movement.id)}
+                                                disabled={submitting}
+                                                className="rounded-md border border-rose-400/40 px-2 py-1 text-[10px] text-rose-200 hover:bg-rose-500/10 disabled:opacity-50"
+                                              >
+                                                Quitar
+                                              </button>
+                                            ) : (
+                                              <span className="text-[10px] text-slate-500">Solo lectura</span>
+                                            )}
+                                          </td>
+                                        </tr>
+                                      ))
+                                    ) : (
+                                      <tr>
+                                        <td className="px-3 py-4 text-center text-slate-400" colSpan={6}>
+                                          Esta deuda no tiene movimientos.
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          </>
+                        );
+                      })()}
                     </article>
                   );
                 })}
