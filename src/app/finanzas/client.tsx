@@ -44,6 +44,8 @@ type FinanceData = {
   totals: {
     income: number;
     expense: number;
+    openingBalance: number;
+    weeklyNet: number;
     balance: number;
   };
   debts: DebtSummary[];
@@ -209,6 +211,9 @@ export function FinanceClient({ userRole }: FinanceClientProps) {
     if (!data) return "";
     return `${formatDateLabel(data.weekStart)} - ${formatDateLabel(data.weekEnd)}`;
   }, [data]);
+
+  const openingBalance = data?.totals.openingBalance ?? 0;
+  const weeklyNet = data?.totals.weeklyNet ?? 0;
 
   const submitEntry = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
@@ -604,6 +609,12 @@ export function FinanceClient({ userRole }: FinanceClientProps) {
               <article className="rounded-xl border border-cyan-400/30 bg-cyan-500/10 p-4">
                 <p className="text-xs uppercase tracking-wide text-cyan-200">Balance semanal</p>
                 <p className="mt-2 text-2xl font-semibold text-cyan-100">{formatMoney(data.totals.balance)}</p>
+                <p className="mt-2 text-[11px] text-cyan-200/90">
+                  Saldo inicial: {formatMoney(openingBalance)}
+                </p>
+                <p className="text-[11px] text-cyan-200/90">
+                  Movimiento semana: {formatMoney(weeklyNet)}
+                </p>
               </article>
             </div>
 

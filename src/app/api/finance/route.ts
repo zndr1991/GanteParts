@@ -28,7 +28,7 @@ export async function GET(req: Request) {
   const anchorDate = parsedWeek ?? new Date();
   const weekRange = getWeekRangeUtc(anchorDate);
 
-  const [entries, debts] = await Promise.all([
+  const [entries, debts, openingRows] = await Promise.all([
     prisma.financeEntry.findMany({
       where: {
         ...(ownerWhere ?? {}),
@@ -47,11 +47,37 @@ export async function GET(req: Request) {
         }
       },
       orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }]
+    }),
+    prisma.financeEntry.groupBy({
+      by: ["type"],
+      where: {
+        ...(ownerWhere ?? {}),
+        entryDate: {
+          lt: weekRange.start
+        }
+      },
+      _sum: {
+        amount: true
+      }
     })
   ]);
 
   let incomeTotal = 0;
   let expenseTotal = 0;
+
+  let openingIncome = 0;
+  let openingExpense = 0;
+
+  openingRows.forEach((row) => {
+    const amount = toAmount(row._sum.amount);
+    if (row.type === "INCOME") {
+      openingIncome += amount;
+      return;
+    }
+    openingExpense += amount;
+  });
+
+  const openingBalance = openingIncome - openingExpense;
 
   const serializedEntries = entries.map((entry) => {
     const amount = toAmount(entry.amount);
@@ -125,7 +151,9 @@ export async function GET(req: Request) {
     totals: {
       income: incomeTotal,
       expense: expenseTotal,
-      balance: incomeTotal - expenseTotal
+      openingBalance,
+      weeklyNet: incomeTotal - expenseTotal,
+      balance: openingBalance + incomeTotal - expenseTotal
     },
     debts: serializedDebts,
     debtTotals: {
