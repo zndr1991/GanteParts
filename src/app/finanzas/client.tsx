@@ -674,14 +674,14 @@ export function FinanceClient({ userRole }: FinanceClientProps) {
             </form>
 
             <div className="overflow-x-auto rounded-xl border border-slate-700">
-              <table className="min-w-[760px] w-full border-collapse text-sm">
+              <table className="min-w-[860px] w-full border-collapse text-sm">
                 <thead className="bg-slate-900/80 text-left text-xs uppercase tracking-wide text-slate-400">
                   <tr>
                     <th className="px-3 py-2">Fecha</th>
-                    <th className="px-3 py-2">Tipo</th>
                     <th className="px-3 py-2">Concepto</th>
                     <th className="px-3 py-2">Codigo</th>
-                    <th className="px-3 py-2 text-right">Monto</th>
+                    <th className="px-3 py-2 text-right">Ingreso</th>
+                    <th className="px-3 py-2 text-right">Egreso</th>
                     <th className="px-3 py-2 text-right">Acciones</th>
                   </tr>
                 </thead>
@@ -690,24 +690,13 @@ export function FinanceClient({ userRole }: FinanceClientProps) {
                     data.entries.map((entry) => (
                       <tr key={entry.id} className="border-t border-slate-800 text-slate-200">
                         <td className="px-3 py-2">{formatDateLabel(entry.date)}</td>
-                        <td className="px-3 py-2">
-                          <span
-                            className={`rounded-full border px-2 py-0.5 text-xs ${
-                              entry.type === "income"
-                                ? "border-emerald-400/50 text-emerald-200"
-                                : "border-rose-400/50 text-rose-200"
-                            }`}
-                          >
-                            {entry.type === "income" ? "Ingreso" : "Egreso"}
-                          </span>
-                        </td>
                         <td className="px-3 py-2">{entry.concept}</td>
                         <td className="px-3 py-2 font-mono text-xs text-slate-300">{entry.code || "-"}</td>
-                        <td className="px-3 py-2 text-right font-semibold">
-                          <span className={entry.type === "income" ? "text-emerald-200" : "text-rose-200"}>
-                            {entry.type === "income" ? "+" : "-"}
-                            {formatMoney(entry.amount)}
-                          </span>
+                        <td className="px-3 py-2 text-right font-semibold text-emerald-200">
+                          {entry.type === "income" ? `+${formatMoney(entry.amount)}` : "-"}
+                        </td>
+                        <td className="px-3 py-2 text-right font-semibold text-rose-200">
+                          {entry.type === "expense" ? `-${formatMoney(entry.amount)}` : "-"}
                         </td>
                         <td className="px-3 py-2 text-right">
                           {canManage ? (
