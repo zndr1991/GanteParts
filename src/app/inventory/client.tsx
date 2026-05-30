@@ -75,6 +75,13 @@ type InventoryPageResponse = {
   statusTotals?: Record<string, number>;
 };
 
+type FinanceEntryType = "income" | "expense";
+
+type SoldFinanceRegistrationResult =
+  | { status: "skipped" }
+  | { status: "registered"; entryType: FinanceEntryType }
+  | { status: "failed"; message: string };
+
 export type InventoryClientItem = Item;
 export type InventoryInitialPage = InventoryPageResponse;
 
@@ -344,6 +351,22 @@ const formatCurrencyMx = (value?: number | null) => {
   } catch {
     return value?.toString() ?? "-";
   }
+};
+
+const todayDateOnly = () => new Date().toISOString().slice(0, 10);
+
+const toDateOnly = (value?: string | null) => {
+  const raw = (value ?? "").toString().trim();
+  if (!raw.length) return todayDateOnly();
+  return raw.slice(0, 10);
+};
+
+const parsePositiveAmountInput = (rawValue: string) => {
+  const normalized = rawValue.replace(/[^0-9.-]/g, "").trim();
+  if (!normalized.length) return null;
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.round(parsed * 100) / 100;
 };
 
 const formatRelativeTime = (value: string) => {
@@ -1765,8 +1788,33 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       if (!res.ok) {
         throw new Error(data.error || "No se pudo actualizar");
       }
+
+      let financeResult: SoldFinanceRegistrationResult = { status: "skipped" };
+      if (normalized === "VENDIDO" && current) {
+        const piece =
+          (current.extraData?.pieza ?? current.title ?? "").toString().trim().toUpperCase() ||
+          "PIEZA VENDIDA";
+        financeResult = await registerSoldItemInFinance({
+          piece,
+          skuInternal: current.skuInternal,
+          defaultAmount: current.price,
+          saleDate: fechaPrestamoPago
+        });
+      }
+
+      const financeMessage =
+        financeResult.status === "registered"
+          ? financeResult.entryType === "income"
+            ? " y registrada en ingresos"
+            : " y registrada en egresos"
+          : "";
+
       if (data?.mlSyncError) {
-        setMessage(`Estatus interno guardado, pero ML falló: ${data.mlSyncError}`);
+        setMessage(`Estatus interno guardado${financeMessage}, pero ML falló: ${data.mlSyncError}`);
+      } else if (financeResult.status === "failed") {
+        setMessage(financeResult.message);
+      } else if (financeResult.status === "registered") {
+        setMessage(`Estatus interno guardado${financeMessage}`);
       }
     } catch (err: any) {
       setItems(prevItems);
@@ -1775,7 +1823,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     } finally {
       setUpdatingIds((prev) => prev.filter((x) => x !== id));
     }
-  }, [items]);
+  }, [items, registerSoldItemInFinance]);
 
   const updateOrigen = useCallback(async (id: string, value: string) => {
     const upper = value.trim().toUpperCase();
@@ -2163,6 +2211,90 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     [canEditInventory, updateExtraDataInState, updateUbicacion]
   );
 
+  const registerSoldItemInFinance = useCallback(
+    async ({
+      piece,
+      skuInternal,
+      defaultAmount,
+      saleDate
+    }: {
+      piece: string;
+      skuInternal: string;
+      defaultAmount?: number | null;
+      saleDate?: string | null;
+    }): Promise<SoldFinanceRegistrationResult> => {
+      const shouldRegister = window.confirm("¿Quieres agregar esta pieza vendida a finanzas?");
+      if (!shouldRegister) return { status: "skipped" };
+
+      const typeAnswer = window.prompt(
+        "¿En qué sección quieres registrarla?\nEscribe INGRESO o EGRESO",
+        "INGRESO"
+      );
+      if (typeAnswer === null) return { status: "skipped" };
+
+      const normalizedType = typeAnswer.trim().toUpperCase();
+      if (normalizedType !== "INGRESO" && normalizedType !== "EGRESO") {
+        return {
+          status: "failed",
+          message: "Venta marcada como VENDIDO, pero no se registró en finanzas: elige INGRESO o EGRESO"
+        };
+      }
+
+      const entryType: FinanceEntryType = normalizedType === "INGRESO" ? "income" : "expense";
+
+      const defaultAmountText =
+        defaultAmount !== null &&
+        defaultAmount !== undefined &&
+        Number.isFinite(defaultAmount) &&
+        defaultAmount > 0
+          ? String(defaultAmount)
+          : "";
+
+      const amountAnswer = window.prompt(
+        "¿En cuánto se vendió la pieza?\nPuedes cambiar el costo para registrarlo en finanzas.",
+        defaultAmountText
+      );
+      if (amountAnswer === null) return { status: "skipped" };
+
+      const amount = parsePositiveAmountInput(amountAnswer);
+      if (!amount) {
+        return {
+          status: "failed",
+          message: "Venta marcada como VENDIDO, pero no se registró en finanzas: monto inválido"
+        };
+      }
+
+      const concept = ((piece || "PIEZA VENDIDA").trim().toUpperCase() || "PIEZA VENDIDA").slice(0, 180);
+      const code = (skuInternal ?? "").toString().trim().toUpperCase() || null;
+      const date = toDateOnly(saleDate);
+
+      const response = await fetch("/api/finance/entries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: entryType,
+          date,
+          concept,
+          code,
+          amount
+        })
+      });
+
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        return {
+          status: "failed",
+          message:
+            payload?.error ||
+            "Venta marcada como VENDIDO, pero no se pudo registrar en finanzas"
+        };
+      }
+
+      return { status: "registered", entryType };
+    },
+    []
+  );
+
   const handleMlItemBlur = useCallback(
     (item: Item, rawValue: string) => {
       if (!canEditInventory) return;
@@ -2455,10 +2587,37 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         current.map((row) => (row.id === inventoryEditForm.id ? { ...row, ...(updatedItem as Partial<Item>) } : row))
       );
 
+      let financeResult: SoldFinanceRegistrationResult = { status: "skipped" };
+      if (estatusInterno === "VENDIDO") {
+        const pieceForFinance =
+          pieza ||
+          (updatedItem?.extraData && typeof updatedItem.extraData === "object"
+            ? String((updatedItem.extraData as Record<string, unknown>).pieza ?? "")
+            : "") ||
+          String(updatedItem?.title ?? "") ||
+          "PIEZA VENDIDA";
+
+        financeResult = await registerSoldItemInFinance({
+          piece: pieceForFinance,
+          skuInternal,
+          defaultAmount: priceValue ?? (typeof updatedItem?.price === "number" ? updatedItem.price : null),
+          saleDate: fechaPrestamoPago
+        });
+      }
+
+      const financeMessage =
+        financeResult.status === "registered"
+          ? financeResult.entryType === "income"
+            ? " y registrada en ingresos"
+            : " y registrada en egresos"
+          : "";
+
       setMessage(
         mlSyncError
-          ? `Registro actualizado, pero ML falló: ${mlSyncError}`
-          : "Registro actualizado"
+          ? `Registro actualizado${financeMessage}, pero ML falló: ${mlSyncError}`
+          : financeResult.status === "failed"
+          ? financeResult.message
+          : `Registro actualizado${financeMessage}`
       );
 
       setInventoryEditForm(null);
@@ -2467,7 +2626,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     } finally {
       setInventoryEditSaving(false);
     }
-  }, [canEditInventory, inventoryEditForm]);
+  }, [canEditInventory, inventoryEditForm, registerSoldItemInFinance]);
 
   const deferredSearch = useDeferredValue(search);
   const normalizedSearch = deferredSearch.trim().toLowerCase();
