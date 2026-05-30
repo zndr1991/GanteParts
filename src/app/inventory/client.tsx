@@ -164,7 +164,7 @@ const MAX_PHOTO_DIMENSION = 1280; // ancho/alto maximo al comprimir
 const PHOTO_QUALITY = 0.8; // calidad JPEG al recomprimir
 const drawingColors = ["#f87171", "#facc15", "#4ade80", "#38bdf8", "#f472b6", "#ffffff"];
 const THUMBNAILS_ENABLED = true;
-const THUMBNAIL_PREFETCH_LIMIT = 40; // evita descargas masivas por pagina
+const THUMBNAIL_PREFETCH_LIMIT = 0; // 0 desactiva prefetch al entrar; solo carga por hover/click
 const THUMBNAIL_FETCH_GAP_MS = 120;
 const NOTIFICATIONS_PAGE_SIZE = 10;
 const NOTIFICATIONS_POLL_INTERVAL_MS = 20_000;
@@ -3101,6 +3101,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
   useEffect(() => {
     if (!thumbnailsActive) return;
+    if (THUMBNAIL_PREFETCH_LIMIT <= 0) return;
     const prioritizedItems = isMobile
       ? paginatedFilteredItems.slice(0, Math.min(THUMBNAIL_PREFETCH_LIMIT, 24))
       : virtualizedDesktopRows.rows;
@@ -4157,8 +4158,16 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                         }`}
                         onClick={(event) => {
                           event.stopPropagation();
+                          if (previewEnabled && !previewSrc && !previewLoading) {
+                            void ensureThumbnail(item.id);
+                          }
                           if (canEditInventory) {
                             openPhotoModal(item);
+                          }
+                        }}
+                        onTouchStart={() => {
+                          if (previewEnabled && !previewSrc && !previewLoading) {
+                            void ensureThumbnail(item.id);
                           }
                         }}
                         disabled={!canEditInventory}
@@ -4452,6 +4461,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                               }`}
                               onClick={(event) => {
                                 event.stopPropagation();
+                                if (previewEnabled && !previewSrc && !previewLoading) {
+                                  void ensureThumbnail(item.id);
+                                }
                                 if (canEditInventory) {
                                   openPhotoModal(item);
                                 }
