@@ -171,6 +171,7 @@ const NOTIFICATIONS_POLL_INTERVAL_MS = 20_000;
 const TABLE_OVERSCAN_ROWS = 8;
 const INVENTORY_TABLE_COLUMN_COUNT = 27;
 const WORKER_SEARCH_MIN_ITEMS = 250;
+const INVENTORY_PAGE_BLOCK_SIZE = 100;
 
 const makePhotoKey = (file: File) => `${file.name}-${file.size}-${file.lastModified}`;
 
@@ -564,6 +565,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [workerSearchResult, setWorkerSearchResult] = useState<{ query: string; ids: string[] } | null>(null);
   const [workerSearching, setWorkerSearching] = useState(false);
   const [loadingPage, setLoadingPage] = useState(false);
+  const [inventoryPage, setInventoryPage] = useState(1);
   const [tableScrollTop, setTableScrollTop] = useState(0);
   const [sectionVisibility, setSectionVisibility] = useState<Record<SectionKey, boolean>>({
     notifications: false,
@@ -3010,10 +3012,40 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     return sorted;
   }, [facetedFilteredItems, sortConfig, getItemPieceName, getItemYearLabel]);
 
+  const filteredTotalPages = useMemo(() => {
+    return Math.max(1, Math.ceil(filteredItems.length / INVENTORY_PAGE_BLOCK_SIZE));
+  }, [filteredItems.length]);
+
+  useEffect(() => {
+    setInventoryPage(1);
+  }, [
+    normalizedSearch,
+    normalizedStatusFilter,
+    normalizedInventoryMarcaFilter,
+    normalizedInventoryCocheFilter,
+    normalizedInventoryPiezaFilter,
+    sortConfig
+  ]);
+
+  useEffect(() => {
+    if (inventoryPage <= filteredTotalPages) return;
+    setInventoryPage(filteredTotalPages);
+  }, [filteredTotalPages, inventoryPage]);
+
+  const paginatedFilteredItems = useMemo(() => {
+    const start = (inventoryPage - 1) * INVENTORY_PAGE_BLOCK_SIZE;
+    return filteredItems.slice(start, start + INVENTORY_PAGE_BLOCK_SIZE);
+  }, [filteredItems, inventoryPage]);
+
+  const paginatedVisibleStart = filteredItems.length
+    ? (inventoryPage - 1) * INVENTORY_PAGE_BLOCK_SIZE + 1
+    : 0;
+  const paginatedVisibleEnd = Math.min(inventoryPage * INVENTORY_PAGE_BLOCK_SIZE, filteredItems.length);
+
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
 
   const virtualizedDesktopRows = useMemo(() => {
-    const totalRows = filteredItems.length;
+    const totalRows = paginatedFilteredItems.length;
     if (!totalRows) {
       return {
         rows: [] as Item[],
@@ -3027,11 +3059,11 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     const endIndex = Math.min(totalRows, startIndex + visibleRows);
 
     return {
-      rows: filteredItems.slice(startIndex, endIndex),
+      rows: paginatedFilteredItems.slice(startIndex, endIndex),
       topSpacerHeight: startIndex * tableRowHeight,
       bottomSpacerHeight: Math.max(0, (totalRows - endIndex) * tableRowHeight)
     };
-  }, [filteredItems, tableRowHeight, tableScrollTop, tableViewportHeight]);
+  }, [paginatedFilteredItems, tableRowHeight, tableScrollTop, tableViewportHeight]);
 
   useEffect(() => {
     if (isMobile) return;
@@ -3046,7 +3078,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     normalizedInventoryMarcaFilter,
     normalizedInventoryCocheFilter,
     normalizedInventoryPiezaFilter,
-    sortConfig
+    sortConfig,
+    inventoryPage
   ]);
 
   const statusCounters = useMemo(() => {
@@ -3068,9 +3101,12 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
   useEffect(() => {
     if (!thumbnailsActive) return;
-    const queue = filteredItems
+    const prioritizedItems = isMobile
+      ? paginatedFilteredItems.slice(0, Math.min(THUMBNAIL_PREFETCH_LIMIT, 24))
+      : virtualizedDesktopRows.rows;
+
+    const queue = prioritizedItems
       .filter((item) => (item.photoCount ?? 0) > 0)
-      .slice(0, THUMBNAIL_PREFETCH_LIMIT)
       .map((item) => item.id)
       .filter((id) => thumbnailCache[id] === undefined && !thumbnailLoadingIds[id]);
 
@@ -3092,7 +3128,15 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     return () => {
       cancelled = true;
     };
-  }, [thumbnailsActive, filteredItems, ensureThumbnail, thumbnailCache, thumbnailLoadingIds]);
+  }, [
+    thumbnailsActive,
+    paginatedFilteredItems,
+    virtualizedDesktopRows.rows,
+    isMobile,
+    ensureThumbnail,
+    thumbnailCache,
+    thumbnailLoadingIds
+  ]);
 
   return (
     <>
@@ -3799,7 +3843,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                   className="w-full sm:w-64 rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm focus:border-amber-400 focus:outline-none"
                 />
                 <span className="text-xs text-slate-400">
-                  Mostrando {filteredItems.length} de {totalItems}
+                  Mostrando {paginatedVisibleStart}-{paginatedVisibleEnd} de {filteredItems.length}
                 </span>
               </div>
               <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-4">
@@ -3961,10 +4005,51 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
               })}
             </div>
           )}
+          {filteredItems.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-700 bg-slate-900/60 p-3 text-xs text-slate-300">
+              <span>
+                Página {inventoryPage} de {filteredTotalPages} · registros {paginatedVisibleStart}-{paginatedVisibleEnd}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setInventoryPage(1)}
+                  disabled={inventoryPage === 1}
+                  className="rounded-md border border-slate-600 px-2 py-1 text-xs hover:border-amber-400 disabled:opacity-50"
+                >
+                  «
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setInventoryPage((prev) => Math.max(1, prev - 1))}
+                  disabled={inventoryPage === 1}
+                  className="rounded-md border border-slate-600 px-3 py-1 text-xs hover:border-amber-400 disabled:opacity-50"
+                >
+                  Anterior
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setInventoryPage((prev) => Math.min(filteredTotalPages, prev + 1))}
+                  disabled={inventoryPage >= filteredTotalPages}
+                  className="rounded-md border border-slate-600 px-3 py-1 text-xs hover:border-amber-400 disabled:opacity-50"
+                >
+                  Siguiente
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setInventoryPage(filteredTotalPages)}
+                  disabled={inventoryPage >= filteredTotalPages}
+                  className="rounded-md border border-slate-600 px-2 py-1 text-xs hover:border-amber-400 disabled:opacity-50"
+                >
+                  »
+                </button>
+              </div>
+            </div>
+          )}
           <p className="text-xs text-slate-400">
             {loadingPage
               ? "Cargando registros..."
-              : `Mostrando ${items.length} de ${totalItems} registros`}
+              : `Mostrando ${paginatedVisibleStart}-${paginatedVisibleEnd} de ${filteredItems.length} filtrados (${items.length} cargados)`}
           </p>
           {isMobile && (
           <div className="mt-4 space-y-3">
@@ -3975,7 +4060,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                   : "No hay registros que coincidan con el filtro aplicado."}
               </div>
             ) : (
-              filteredItems.map((item) => {
+              paginatedFilteredItems.map((item) => {
                 const extra = item.extraData ?? {};
                 const internalStatusRaw = (extra.estatus_interno ?? "").toString().trim();
                 const internalStatus = internalStatusRaw.length ? internalStatusRaw.toUpperCase() : "SIN ESTATUS";
