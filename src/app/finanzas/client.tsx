@@ -442,6 +442,50 @@ export function FinanceClient({ userRole }: FinanceClientProps) {
           throw new Error(payload.error || "No se pudo guardar el movimiento de deuda");
         }
 
+        let mirrorEntryType: EntryType | null = null;
+        let mirrorEntryFailed = false;
+
+        const movementLabel = type === "payment" ? "abono" : "cargo";
+        const shouldMirrorInCashflow = window.confirm(
+          `¿Quieres agregar este ${movementLabel} tambien a ingresos/egresos?`
+        );
+
+        if (shouldMirrorInCashflow) {
+          const addAsIncome = window.confirm(
+            "¿Agregarlo como ingreso?\nAceptar = ingreso\nCancelar = egreso"
+          );
+          const selectedEntryType: EntryType = addAsIncome ? "income" : "expense";
+          const debtName = data?.debts.find((debt) => debt.id === debtId)?.creditorName?.trim() || "";
+          const debtConceptPrefix = type === "payment" ? "Abono deuda" : "Cargo deuda";
+          const mirroredConceptBase = debtName
+            ? `${debtConceptPrefix} ${debtName}: ${concept}`
+            : `${debtConceptPrefix}: ${concept}`;
+          const mirroredConcept = mirroredConceptBase.slice(0, 180);
+
+          try {
+            const mirrorResponse = await fetch("/api/finance/entries", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                type: selectedEntryType,
+                date: draft.date,
+                concept: mirroredConcept,
+                code: null,
+                amount
+              })
+            });
+
+            const mirrorPayload = await mirrorResponse.json().catch(() => ({}));
+            if (!mirrorResponse.ok) {
+              throw new Error(mirrorPayload.error || "No se pudo agregar en ingresos/egresos");
+            }
+
+            mirrorEntryType = selectedEntryType;
+          } catch {
+            mirrorEntryFailed = true;
+          }
+        }
+
         setMovementDrafts((current) => {
           const debtDraft =
             current[debtId] ?? {
@@ -457,7 +501,17 @@ export function FinanceClient({ userRole }: FinanceClientProps) {
           };
         });
 
-        setMessage(type === "payment" ? "Abono registrado" : "Cargo registrado");
+        const baseMessage = type === "payment" ? "Abono registrado" : "Cargo registrado";
+        if (mirrorEntryType === "income") {
+          setMessage(`${baseMessage} y agregado a ingresos`);
+        } else if (mirrorEntryType === "expense") {
+          setMessage(`${baseMessage} y agregado a egresos`);
+        } else if (mirrorEntryFailed) {
+          setMessage(`${baseMessage}, pero no se pudo agregar a ingresos/egresos`);
+        } else {
+          setMessage(baseMessage);
+        }
+
         await fetchFinanceData(weekAnchor, { silent: true });
       } catch (error: any) {
         setMessage(error?.message || "No se pudo guardar el movimiento de deuda");
@@ -465,7 +519,7 @@ export function FinanceClient({ userRole }: FinanceClientProps) {
         setSubmitting(false);
       }
     },
-    [canManage, fetchFinanceData, movementDrafts, weekAnchor]
+    [canManage, data?.debts, fetchFinanceData, movementDrafts, weekAnchor]
   );
 
   const deleteDebtMovement = useCallback(
