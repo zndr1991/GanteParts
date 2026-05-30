@@ -171,7 +171,7 @@ const NOTIFICATIONS_POLL_INTERVAL_MS = 20_000;
 const TABLE_OVERSCAN_ROWS = 8;
 const INVENTORY_TABLE_COLUMN_COUNT = 27;
 const WORKER_SEARCH_MIN_ITEMS = 250;
-const INVENTORY_PAGE_BLOCK_SIZE = 100;
+const INVENTORY_PAGE_BLOCK_SIZE = 40;
 
 const makePhotoKey = (file: File) => `${file.name}-${file.size}-${file.lastModified}`;
 
