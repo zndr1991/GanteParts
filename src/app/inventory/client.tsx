@@ -3034,6 +3034,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     const start = (inventoryPage - 1) * INVENTORY_PAGE_BLOCK_SIZE;
     return filteredItems.slice(start, start + INVENTORY_PAGE_BLOCK_SIZE);
   }, [filteredItems, inventoryPage]);
+  const shouldVirtualizeDesktop = paginatedFilteredItems.length > 120;
 
   const paginatedVisibleStart = filteredItems.length
     ? (inventoryPage - 1) * INVENTORY_PAGE_BLOCK_SIZE + 1
@@ -3052,6 +3053,14 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       };
     }
 
+    if (!shouldVirtualizeDesktop) {
+      return {
+        rows: paginatedFilteredItems,
+        topSpacerHeight: 0,
+        bottomSpacerHeight: 0
+      };
+    }
+
     const startIndex = Math.max(0, tableScrollRowStart - TABLE_OVERSCAN_ROWS);
     const visibleRows = Math.ceil(tableViewportHeight / tableRowHeight) + TABLE_OVERSCAN_ROWS * 2;
     const endIndex = Math.min(totalRows, startIndex + visibleRows);
@@ -3061,7 +3070,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       topSpacerHeight: startIndex * tableRowHeight,
       bottomSpacerHeight: Math.max(0, (totalRows - endIndex) * tableRowHeight)
     };
-  }, [paginatedFilteredItems, tableRowHeight, tableScrollRowStart, tableViewportHeight]);
+  }, [paginatedFilteredItems, shouldVirtualizeDesktop, tableRowHeight, tableScrollRowStart, tableViewportHeight]);
 
   useEffect(() => {
     if (isMobile) return;
@@ -4200,7 +4209,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           <div
             ref={desktopTableContainerRef}
             onScroll={(event) => {
-              if (inventoryNavigationLocked) return;
+              if (inventoryNavigationLocked || !shouldVirtualizeDesktop) return;
               const nextRowStart = Math.floor(event.currentTarget.scrollTop / tableRowHeight);
               setTableScrollRowStart((current) => (current === nextRowStart ? current : nextRowStart));
             }}
