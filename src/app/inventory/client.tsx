@@ -105,6 +105,24 @@ type AnnotationTool = "brush" | "circle" | "arrow";
 
 type SortKey = "estatusInterno" | "pieza" | "sku" | "status" | "marca" | "coche" | "ano" | "precio";
 
+type InventorySearchIndexMessage = {
+  type: "index";
+  items: Item[];
+};
+
+type InventorySearchQueryMessage = {
+  type: "search";
+  query: string;
+  requestId: number;
+};
+
+type InventorySearchWorkerResultMessage = {
+  type: "search-result";
+  query: string;
+  requestId: number;
+  ids: string[];
+};
+
 const brandOptions = [
   "ACURA",
   "AUDI",
@@ -152,6 +170,7 @@ const NOTIFICATIONS_PAGE_SIZE = 10;
 const NOTIFICATIONS_POLL_INTERVAL_MS = 20_000;
 const TABLE_OVERSCAN_ROWS = 8;
 const INVENTORY_TABLE_COLUMN_COUNT = 27;
+const WORKER_SEARCH_MIN_ITEMS = 250;
 
 const makePhotoKey = (file: File) => `${file.name}-${file.size}-${file.lastModified}`;
 
@@ -170,6 +189,34 @@ const normalizeStatusTotals = (value: unknown): Record<string, number> => {
     normalized[normalizedLabel] = Math.round(parsedCount);
   });
   return normalized;
+};
+
+const buildInventorySearchText = (item: Item) => {
+  return [
+    item.skuInternal,
+    item.title ?? "",
+    item.extraData?.descripcion_local ?? "",
+    item.extraData?.descripcion_ml ?? "",
+    item.mlItemId ?? "",
+    item.sellerCustomField ?? "",
+    item.extraData?.estatus_interno ?? "",
+    item.extraData?.origen ?? "",
+    item.extraData?.coche ?? "",
+    item.extraData?.pieza ?? "",
+    item.extraData?.marca ?? "",
+    item.extraData?.ano_desde ?? "",
+    item.extraData?.ano_hasta ?? "",
+    item.extraData?.ubicacion ?? "",
+    item.extraData?.inventario ?? "",
+    item.extraData?.revision ?? "",
+    item.extraData?.facebook ?? "",
+    item.extraData?.prestado_vendido_a ?? "",
+    item.extraData?.fecha_prestamo_pago ?? "",
+    String(item.stock ?? ""),
+    String(item.price ?? "")
+  ]
+    .join(" ")
+    .toLowerCase();
 };
 
 const readFileAsDataUrl = (file: File) =>
@@ -502,6 +549,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastNotificationIdRef = useRef<string | null>(null);
   const fullLoadAttemptedRef = useRef(false);
+  const searchWorkerRef = useRef<Worker | null>(null);
+  const workerSearchRequestIdRef = useRef(0);
   const isMountedRef = useRef(true);
   const desktopTableContainerRef = useRef<HTMLDivElement | null>(null);
   const localEstatusInternoRef = useRef(
@@ -512,6 +561,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [statusTotals, setStatusTotals] = useState<Record<string, number>>(
     normalizeStatusTotals(initialPage.statusTotals)
   );
+  const [workerSearchResult, setWorkerSearchResult] = useState<{ query: string; ids: string[] } | null>(null);
+  const [workerSearching, setWorkerSearching] = useState(false);
   const [loadingPage, setLoadingPage] = useState(false);
   const [tableScrollTop, setTableScrollTop] = useState(0);
   const [sectionVisibility, setSectionVisibility] = useState<Record<SectionKey, boolean>>({
@@ -551,6 +602,48 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       setSectionVisibility({ notifications: false, manual: true, import: true });
     }
   }, [isManualOnly, isMobile]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof Worker === "undefined") {
+      return;
+    }
+
+    let mounted = true;
+    let worker: Worker;
+
+    try {
+      worker = new Worker(new URL("../../workers/inventory-search.worker.ts", import.meta.url), { type: "module" });
+    } catch (error) {
+      console.error("No se pudo iniciar el worker de busqueda de inventario", error);
+      return;
+    }
+
+    searchWorkerRef.current = worker;
+
+    worker.onmessage = (event: MessageEvent<InventorySearchWorkerResultMessage>) => {
+      if (!mounted) return;
+      const payload = event.data;
+      if (!payload || payload.type !== "search-result") return;
+      if (payload.requestId !== workerSearchRequestIdRef.current) return;
+      setWorkerSearchResult({ query: payload.query, ids: payload.ids });
+      setWorkerSearching(false);
+    };
+
+    worker.onerror = (error) => {
+      console.error("Worker de busqueda de inventario fallo", error);
+      if (mounted) {
+        setWorkerSearching(false);
+      }
+    };
+
+    return () => {
+      mounted = false;
+      if (searchWorkerRef.current === worker) {
+        searchWorkerRef.current = null;
+      }
+      worker.terminate();
+    };
+  }, []);
 
   const toggleSection = useCallback((section: SectionKey) => {
     if (isManualOnly) return;
@@ -2659,46 +2752,72 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
   const deferredSearch = useDeferredValue(search);
   const normalizedSearch = deferredSearch.trim().toLowerCase();
+  const canUseWorkerSearch = !isManualOnly && items.length >= WORKER_SEARCH_MIN_ITEMS;
 
-  const inventorySearchIndex = useMemo(
-    () =>
-      items.map((item) => ({
-        item,
-        text: [
-          item.skuInternal,
-          item.title ?? "",
-          item.extraData?.descripcion_local ?? "",
-          item.extraData?.descripcion_ml ?? "",
-          item.mlItemId ?? "",
-          item.sellerCustomField ?? "",
-          item.extraData?.estatus_interno ?? "",
-          item.extraData?.origen ?? "",
-          item.extraData?.coche ?? "",
-          item.extraData?.pieza ?? "",
-          item.extraData?.marca ?? "",
-          item.extraData?.ano_desde ?? "",
-          item.extraData?.ano_hasta ?? "",
-          item.extraData?.ubicacion ?? "",
-          item.extraData?.inventario ?? "",
-          item.extraData?.revision ?? "",
-          item.extraData?.facebook ?? "",
-          item.extraData?.prestado_vendido_a ?? "",
-          item.extraData?.fecha_prestamo_pago ?? "",
-          String(item.stock ?? ""),
-          String(item.price ?? "")
-        ]
-          .join(" ")
-          .toLowerCase()
-      })),
-    [items]
-  );
+  useEffect(() => {
+    const worker = searchWorkerRef.current;
+    if (!worker || !canUseWorkerSearch) {
+      setWorkerSearchResult(null);
+      setWorkerSearching(false);
+      return;
+    }
+
+    const payload: InventorySearchIndexMessage = {
+      type: "index",
+      items
+    };
+    worker.postMessage(payload);
+  }, [canUseWorkerSearch, items]);
+
+  useEffect(() => {
+    const worker = searchWorkerRef.current;
+    if (!worker || !canUseWorkerSearch) return;
+
+    if (!normalizedSearch.length) {
+      setWorkerSearchResult(null);
+      setWorkerSearching(false);
+      return;
+    }
+
+    const requestId = workerSearchRequestIdRef.current + 1;
+    workerSearchRequestIdRef.current = requestId;
+    setWorkerSearching(true);
+
+    const payload: InventorySearchQueryMessage = {
+      type: "search",
+      query: normalizedSearch,
+      requestId
+    };
+    worker.postMessage(payload);
+  }, [canUseWorkerSearch, items, normalizedSearch]);
+
+  const itemById = useMemo(() => {
+    return new Map(items.map((item) => [item.id, item]));
+  }, [items]);
+
+  const fallbackSearchFilteredItems = useMemo(() => {
+    if (!normalizedSearch.length) return items;
+    return items.filter((item) => buildInventorySearchText(item).includes(normalizedSearch));
+  }, [items, normalizedSearch]);
 
   const searchFilteredItems = useMemo(() => {
     if (!normalizedSearch.length) return items;
-    return inventorySearchIndex
-      .filter((entry) => entry.text.includes(normalizedSearch))
-      .map((entry) => entry.item);
-  }, [items, inventorySearchIndex, normalizedSearch]);
+
+    if (canUseWorkerSearch) {
+      if (!workerSearchResult || workerSearchResult.query !== normalizedSearch) {
+        return [];
+      }
+
+      return workerSearchResult.ids
+        .map((id) => itemById.get(id))
+        .filter((item): item is Item => Boolean(item));
+    }
+
+    return fallbackSearchFilteredItems;
+  }, [items, normalizedSearch, canUseWorkerSearch, workerSearchResult, itemById, fallbackSearchFilteredItems]);
+
+  const workerSearchPending =
+    canUseWorkerSearch && normalizedSearch.length > 0 && (workerSearching || !workerSearchResult || workerSearchResult.query !== normalizedSearch);
 
   const normalizedStatusFilter = statusFilter?.toUpperCase() ?? null;
   const statusAndSearchFilteredItems = useMemo(() => {
@@ -3851,7 +3970,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           <div className="mt-4 space-y-3">
             {filteredItems.length === 0 ? (
               <div className="rounded-2xl border border-slate-800 bg-slate-950/30 p-6 text-center text-sm text-slate-400">
-                No hay registros que coincidan con el filtro aplicado.
+                {workerSearchPending
+                  ? "Filtrando registros..."
+                  : "No hay registros que coincidan con el filtro aplicado."}
               </div>
             ) : (
               filteredItems.map((item) => {
@@ -4025,7 +4146,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           >
             {filteredItems.length === 0 ? (
               <div className="p-8 text-center text-sm text-slate-400">
-                No hay registros que coincidan con el filtro aplicado.
+                {workerSearchPending
+                  ? "Filtrando registros..."
+                  : "No hay registros que coincidan con el filtro aplicado."}
               </div>
             ) : (
               <table className="min-w-[1100px] w-full border-collapse text-sm">
