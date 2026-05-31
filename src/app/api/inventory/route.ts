@@ -11,6 +11,7 @@ import { z } from "zod";
 
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 5000;
+const STATUS_TOTALS_CACHE_TTL_MS = 5 * 60 * 1000;
 
 const canEditInventory = (role?: string | null) => {
   const normalized = (role ?? "").toLowerCase();
@@ -96,7 +97,7 @@ const isLikelyCodeSearch = (rawValue: string, normalizedToken: string) => {
   if (normalizedToken.length < 3) return false;
   if (rawValue.length > 48) return false;
   if (/\s/.test(rawValue)) return false;
-  return /[0-9]/.test(rawValue);
+  return /[0-9]/.test(rawValue) && /[a-z]/i.test(rawValue);
 };
 
 const parseFacetFilter = (searchParams: URLSearchParams, key: "marcaFilter" | "cocheFilter" | "piezaFilter") => {
@@ -121,10 +122,9 @@ const buildSearchFilterSql = (searchFilter: string | null) => {
     const normalizedPrefixValue = `${normalizedToken}%`;
     return Prisma.sql`
       AND (
-        regexp_replace(lower(coalesce("skuInternal", '')), '[^a-z0-9]+', '', 'g') LIKE ${normalizedPrefixValue}
-        OR regexp_replace(lower(coalesce("mlItemId", '')), '[^a-z0-9]+', '', 'g') LIKE ${normalizedPrefixValue}
-        OR regexp_replace(lower(coalesce("sellerCustomField", '')), '[^a-z0-9]+', '', 'g') LIKE ${normalizedPrefixValue}
-        OR regexp_replace(lower(coalesce("title", '')), '[^a-z0-9]+', '', 'g') LIKE ${normalizedPrefixValue}
+        replace(replace(replace(lower(coalesce("skuInternal", '')), '-', ''), ' ', ''), '_', '') LIKE ${normalizedPrefixValue}
+        OR replace(replace(replace(lower(coalesce("mlItemId", '')), '-', ''), ' ', ''), '_', '') LIKE ${normalizedPrefixValue}
+        OR replace(replace(replace(lower(coalesce("sellerCustomField", '')), '-', ''), ' ', ''), '_', '') LIKE ${normalizedPrefixValue}
       )
     `;
   }
@@ -193,7 +193,22 @@ type StatusCountRow = {
   count: number | bigint | string;
 };
 
-const getStatusTotals = async (ownerId: string | null) => {
+type StatusTotalsCacheEntry = {
+  value: Record<string, number>;
+  expiresAt: number;
+};
+
+const statusTotalsCache = new Map<string, StatusTotalsCacheEntry>();
+const statusTotalsInFlight = new Map<string, Promise<Record<string, number>>>();
+
+const statusTotalsCacheKey = (ownerId: string | null) => ownerId ?? "__ALL__";
+
+const invalidateStatusTotalsCache = () => {
+  statusTotalsCache.clear();
+  statusTotalsInFlight.clear();
+};
+
+const queryStatusTotals = async (ownerId: string | null) => {
   const whereSql = ownerId ? Prisma.sql`WHERE "ownerId" = ${ownerId}` : Prisma.empty;
   const rows = await prisma.$queryRaw<StatusCountRow[]>(Prisma.sql`
     SELECT
@@ -215,6 +230,35 @@ const getStatusTotals = async (ownerId: string | null) => {
   return totals;
 };
 
+const getStatusTotals = async (ownerId: string | null) => {
+  const key = statusTotalsCacheKey(ownerId);
+  const now = Date.now();
+  const cached = statusTotalsCache.get(key);
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+
+  const inflight = statusTotalsInFlight.get(key);
+  if (inflight) {
+    return inflight;
+  }
+
+  const task = queryStatusTotals(ownerId)
+    .then((value) => {
+      statusTotalsCache.set(key, {
+        value,
+        expiresAt: Date.now() + STATUS_TOTALS_CACHE_TTL_MS
+      });
+      return value;
+    })
+    .finally(() => {
+      statusTotalsInFlight.delete(key);
+    });
+
+  statusTotalsInFlight.set(key, task);
+  return task;
+};
+
 export async function GET(req: Request) {
   const session = await auth();
   if (!session?.user?.id) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
@@ -233,6 +277,11 @@ export async function GET(req: Request) {
     const piezaFilter = parseFacetFilter(searchParams, "piezaFilter");
 
     if (statusFilter || searchFilter || marcaFilter || cocheFilter || piezaFilter) {
+      const normalizedSearchToken = searchFilter ? normalizeSearchToken(searchFilter) : "";
+      const codeSearchMode = Boolean(searchFilter && isLikelyCodeSearch(searchFilter, normalizedSearchToken));
+      const fastCodeSearchMode =
+        codeSearchMode && !statusFilter && !marcaFilter && !cocheFilter && !piezaFilter && page === 1;
+
       const ownerSql = ownerId ? Prisma.sql`AND "ownerId" = ${ownerId}` : Prisma.empty;
       const statusSql = buildStatusFilterSql(statusFilter);
       const searchSql = buildSearchFilterSql(searchFilter);
@@ -253,23 +302,26 @@ export async function GET(req: Request) {
           ${piezaSql}
           ORDER BY "updatedAt" DESC
           OFFSET ${skip}
-          LIMIT ${pageSize}
+          LIMIT ${fastCodeSearchMode ? pageSize + 1 : pageSize}
         `),
-        prisma.$queryRaw<CountRow[]>(Prisma.sql`
-          SELECT COUNT(*) AS count
-          FROM "InventoryItem"
-          WHERE 1=1
-          ${ownerSql}
-          ${statusSql}
-          ${searchSql}
-          ${marcaSql}
-          ${cocheSql}
-          ${piezaSql}
-        `),
+        fastCodeSearchMode
+          ? Promise.resolve<CountRow[]>([])
+          : prisma.$queryRaw<CountRow[]>(Prisma.sql`
+              SELECT COUNT(*) AS count
+              FROM "InventoryItem"
+              WHERE 1=1
+              ${ownerSql}
+              ${statusSql}
+              ${searchSql}
+              ${marcaSql}
+              ${cocheSql}
+              ${piezaSql}
+            `),
         getStatusTotals(ownerId)
       ]);
 
-      const ids = idRows.map((row) => row.id);
+      const hasMoreFastRows = fastCodeSearchMode && idRows.length > pageSize;
+      const ids = (hasMoreFastRows ? idRows.slice(0, pageSize) : idRows).map((row) => row.id);
       const items = ids.length
         ? await prisma.inventoryItem.findMany({
             where: ownerId ? { ownerId, id: { in: ids } } : { id: { in: ids } },
@@ -277,7 +329,11 @@ export async function GET(req: Request) {
           })
         : [];
 
-      const total = Number(countRows[0]?.count ?? 0);
+      const total = fastCodeSearchMode
+        ? hasMoreFastRows
+          ? pageSize + 1
+          : ids.length
+        : Number(countRows[0]?.count ?? 0);
       const serialized = items.map((item) => serializeInventoryItem(item));
       const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
@@ -369,6 +425,7 @@ export async function POST(req: Request) {
     }
 
     revalidateInventorySnapshotCache();
+    invalidateStatusTotalsCache();
 
     return NextResponse.json(serializeInventoryItem(item, { includePhotos: true }), { status: 201 });
   } catch (err: any) {
@@ -422,6 +479,7 @@ export async function DELETE(req: Request) {
   });
 
   revalidateInventorySnapshotCache();
+  invalidateStatusTotalsCache();
 
   return NextResponse.json({ deleted: result.count });
 }
@@ -647,6 +705,7 @@ export async function PATCH(req: Request) {
   });
 
   revalidateInventorySnapshotCache();
+  invalidateStatusTotalsCache();
 
   return NextResponse.json({
     ...serializeInventoryItem(item),
