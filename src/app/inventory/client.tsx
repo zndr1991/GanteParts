@@ -101,10 +101,19 @@ type InventoryPageCachePayload = {
   facetOptions: InventoryFacetOptions | null;
 };
 
-type ManualNomenclatureEntry = {
+type ManualNomenclaturePieceEntry = {
   id: string;
   piece: string;
+};
+
+type ManualNomenclatureGroup = {
+  id: string;
   prefix: string;
+  pieces: ManualNomenclaturePieceEntry[];
+};
+
+type ManualNomenclaturesResponse = {
+  items?: ManualNomenclatureGroup[];
 };
 
 type FinanceEntryType = "income" | "expense";
@@ -206,10 +215,6 @@ const SERVER_SEARCH_DEBOUNCE_MS = 320;
 const INVENTORY_PAGE_CACHE_TTL_MS = 25_000;
 const INVENTORY_LOADING_INDICATOR_DELAY_MS = 180;
 const MANUAL_SKU_NUMBER_PADDING = 5;
-const MANUAL_NOMENCLATURE_STORAGE_KEY = "inventory.manual.nomenclatures.v1";
-const DEFAULT_MANUAL_NOMENCLATURES: ManualNomenclatureEntry[] = [
-  { id: "default-faro", piece: "FARO", prefix: "FAR" }
-];
 
 const makePhotoKey = (file: File) => `${file.name}-${file.size}-${file.lastModified}`;
 
@@ -518,18 +523,11 @@ const buildInventoryPageCacheKey = (options: {
   });
 };
 
-const normalizeTextComparable = (value: string) =>
-  value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toUpperCase()
-    .trim();
-
 const normalizeManualNomenclaturePiece = (value: string) =>
-  normalizeTextComparable(value).replace(/\s+/g, " ");
+  value.toUpperCase().trim().replace(/\s+/g, " ");
 
 const normalizeManualNomenclaturePrefix = (value: string) =>
-  normalizeTextComparable(value).replace(/[^A-Z0-9]/g, "");
+  value.toUpperCase().trim().replace(/[^A-Z0-9]/g, "");
 
 const formatSkuFromPrefixNumber = (prefix: string, number: number) => {
   const safe = Number.isFinite(number) && number > 0 ? Math.trunc(number) : 1;
@@ -654,12 +652,14 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     precioCompra: "",
     ubicacion: ""
   });
-  const [manualNomenclatures, setManualNomenclatures] = useState<ManualNomenclatureEntry[]>(
-    DEFAULT_MANUAL_NOMENCLATURES
-  );
-  const [manualNomenclatureDraft, setManualNomenclatureDraft] = useState({ piece: "", prefix: "" });
-  const [manualNomenclatureReady, setManualNomenclatureReady] = useState(false);
+  const [manualNomenclatureGroups, setManualNomenclatureGroups] = useState<ManualNomenclatureGroup[]>([]);
+  const [manualNomenclaturePrefixDraft, setManualNomenclaturePrefixDraft] = useState("");
+  const [manualNomenclaturePieceDraft, setManualNomenclaturePieceDraft] = useState("");
+  const [manualNomenclatureSelectedId, setManualNomenclatureSelectedId] = useState("");
+  const [manualNomenclatureLoading, setManualNomenclatureLoading] = useState(false);
+  const [manualNomenclatureError, setManualNomenclatureError] = useState<string | null>(null);
   const [manualSkuSuggestion, setManualSkuSuggestion] = useState<string>("");
+  const [manualSkuSuggestionPrefix, setManualSkuSuggestionPrefix] = useState<string | null>(null);
   const [manualSkuSuggestionLoading, setManualSkuSuggestionLoading] = useState(false);
   const [manualSkuSuggestionError, setManualSkuSuggestionError] = useState<string | null>(null);
   const [manualSkuEdited, setManualSkuEdited] = useState(false);
@@ -2051,7 +2051,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       }
 
       const skuInput = toUpper(form.skuInternal) ?? "";
-      const suggestedSku = resolvedManualSkuPrefix ? manualSkuSuggestion : "";
+      const suggestedSku = manualSkuSuggestionPrefix ? manualSkuSuggestion : "";
       const resolvedSkuInternal = skuInput || suggestedSku;
       if (!resolvedSkuInternal) {
         throw new Error("No se pudo generar el SKU. Revisa la nomenclatura de la pieza.");
@@ -2091,13 +2091,14 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       });
       setManualSkuEdited(false);
 
-      const usedPrefix = resolvedManualSkuPrefix;
+      const usedPrefix = manualSkuSuggestionPrefix ?? resolvedManualSkuPrefix;
       const usedNumber = usedPrefix ? parseSkuSuffixNumber(resolvedSkuInternal, usedPrefix) : null;
       if (usedPrefix && usedNumber) {
         const cached = manualSkuSequenceCacheRef.current.get(usedPrefix) ?? 1;
         const nextNumber = Math.max(cached, usedNumber + 1);
         manualSkuSequenceCacheRef.current.set(usedPrefix, nextNumber);
         setManualSkuSuggestion(formatSkuFromPrefixNumber(usedPrefix, nextNumber));
+        setManualSkuSuggestionPrefix(usedPrefix);
       }
 
       clearManualPhotos();
@@ -2599,22 +2600,75 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     const piece = normalizeManualNomenclaturePiece(form.pieza);
     if (!piece.length) return null;
 
-    const best = manualNomenclatures.reduce<{ prefix: string; score: number } | null>((current, entry) => {
-      const normalizedPiece = normalizeManualNomenclaturePiece(entry.piece);
-      const normalizedPrefix = normalizeManualNomenclaturePrefix(entry.prefix);
-      if (!normalizedPiece.length || !normalizedPrefix.length) return current;
-      if (!piece.includes(normalizedPiece)) return current;
+    const matched = manualNomenclatureGroups.find((group) =>
+      group.pieces.some((entry) => normalizeManualNomenclaturePiece(entry.piece) === piece)
+    );
 
-      const score = normalizedPiece.length;
-      if (!current || score > current.score) {
-        return { prefix: normalizedPrefix, score };
+    return matched?.prefix ?? null;
+  }, [form.pieza, manualNomenclatureGroups]);
+
+  const selectedManualNomenclature = useMemo(() => {
+    if (!manualNomenclatureSelectedId) return null;
+    return manualNomenclatureGroups.find((group) => group.id === manualNomenclatureSelectedId) ?? null;
+  }, [manualNomenclatureGroups, manualNomenclatureSelectedId]);
+
+  const fetchManualNomenclatures = useCallback(async (preferredSelectionId?: string) => {
+    if (!isManualOnly) return;
+
+    setManualNomenclatureLoading(true);
+    setManualNomenclatureError(null);
+
+    try {
+      const response = await fetch("/api/inventory/nomenclatures", { cache: "no-store" });
+      const payload = (await response.json().catch(() => ({}))) as
+        | (ManualNomenclaturesResponse & { error?: string })
+        | null;
+
+      if (!response.ok) {
+        throw new Error(payload?.error || "No se pudieron cargar las nomenclaturas");
       }
 
-      return current;
-    }, null);
+      const groups = Array.isArray(payload?.items)
+        ? payload.items
+            .map((group) => {
+              const prefix = normalizeManualNomenclaturePrefix((group.prefix ?? "").toString());
+              if (!prefix.length) return null;
 
-    return best ? best.prefix : null;
-  }, [form.pieza, manualNomenclatures]);
+              const pieces = Array.isArray(group.pieces)
+                ? group.pieces
+                    .map((piece) => {
+                      const normalizedPiece = normalizeManualNomenclaturePiece((piece.piece ?? "").toString());
+                      if (!normalizedPiece.length) return null;
+                      return { id: piece.id, piece: normalizedPiece } satisfies ManualNomenclaturePieceEntry;
+                    })
+                    .filter((piece): piece is ManualNomenclaturePieceEntry => Boolean(piece))
+                    .sort((a, b) => a.piece.localeCompare(b.piece, "es"))
+                : [];
+
+              return {
+                id: group.id,
+                prefix,
+                pieces
+              } satisfies ManualNomenclatureGroup;
+            })
+            .filter((group): group is ManualNomenclatureGroup => Boolean(group))
+            .sort((a, b) => a.prefix.localeCompare(b.prefix, "es"))
+        : [];
+
+      setManualNomenclatureGroups(groups);
+      setManualNomenclatureSelectedId((current) => {
+        const desired = (preferredSelectionId ?? "").trim();
+        if (desired.length && groups.some((group) => group.id === desired)) return desired;
+        if (current.length && groups.some((group) => group.id === current)) return current;
+        return groups[0]?.id ?? "";
+      });
+    } catch (error: any) {
+      console.error("No se pudieron cargar las nomenclaturas", error);
+      setManualNomenclatureError(error?.message || "No se pudieron cargar las nomenclaturas");
+    } finally {
+      setManualNomenclatureLoading(false);
+    }
+  }, [isManualOnly]);
 
   const applyManualSkuSuggestion = useCallback((suggestion: string, force = false) => {
     const normalized = suggestion.trim().toUpperCase();
@@ -2629,52 +2683,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   }, [manualSkuEdited]);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    try {
-      const raw = window.localStorage.getItem(MANUAL_NOMENCLATURE_STORAGE_KEY);
-      if (!raw) {
-        setManualNomenclatureReady(true);
-        return;
-      }
-
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) {
-        setManualNomenclatureReady(true);
-        return;
-      }
-
-      const normalized = parsed
-        .map((entry) => {
-          if (!entry || typeof entry !== "object") return null;
-          const source = entry as Record<string, unknown>;
-          const piece = normalizeManualNomenclaturePiece((source.piece ?? "").toString());
-          const prefix = normalizeManualNomenclaturePrefix((source.prefix ?? "").toString());
-          if (!piece.length || !prefix.length) return null;
-          const idRaw = (source.id ?? "").toString().trim();
-          const id = idRaw.length ? idRaw : `${piece}-${prefix}`;
-          return { id, piece, prefix } satisfies ManualNomenclatureEntry;
-        })
-        .filter((entry): entry is ManualNomenclatureEntry => Boolean(entry));
-
-      if (normalized.length) {
-        setManualNomenclatures(normalized);
-      }
-    } catch (error) {
-      console.error("No se pudieron cargar las nomenclaturas manuales", error);
-    } finally {
-      setManualNomenclatureReady(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!manualNomenclatureReady || typeof window === "undefined") return;
-    try {
-      window.localStorage.setItem(MANUAL_NOMENCLATURE_STORAGE_KEY, JSON.stringify(manualNomenclatures));
-    } catch (error) {
-      console.error("No se pudieron guardar las nomenclaturas manuales", error);
-    }
-  }, [manualNomenclatureReady, manualNomenclatures]);
+    if (!isManualOnly) return;
+    void fetchManualNomenclatures();
+  }, [fetchManualNomenclatures, isManualOnly]);
 
   useEffect(() => {
     if (!isManualOnly) return;
@@ -2686,25 +2697,16 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
     setManualSkuSuggestionError(null);
 
-    const prefix = resolvedManualSkuPrefix;
-    if (!prefix) {
+    const piece = normalizeManualNomenclaturePiece(form.pieza);
+    const hasExactPieceMatch = manualNomenclatureGroups.some((group) =>
+      group.pieces.some((entry) => normalizeManualNomenclaturePiece(entry.piece) === piece)
+    );
+
+    if (!piece.length || !hasExactPieceMatch) {
       setManualSkuSuggestion("");
+      setManualSkuSuggestionPrefix(null);
       setManualSkuSuggestionLoading(false);
       lastManualSuggestionPrefixRef.current = null;
-      return;
-    }
-
-    const previousPrefix = lastManualSuggestionPrefixRef.current;
-    const prefixChanged = previousPrefix !== prefix;
-    if (prefixChanged) {
-      setManualSkuEdited(false);
-    }
-    lastManualSuggestionPrefixRef.current = prefix;
-
-    const cachedNext = manualSkuSequenceCacheRef.current.get(prefix);
-    if (cachedNext && Number.isFinite(cachedNext) && cachedNext > 0) {
-      applyManualSkuSuggestion(formatSkuFromPrefixNumber(prefix, cachedNext), prefixChanged);
-      setManualSkuSuggestionLoading(false);
       return;
     }
 
@@ -2712,7 +2714,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     manualSkuRequestAbortRef.current = controller;
     setManualSkuSuggestionLoading(true);
 
-    void fetch(`/api/inventory/sku-sequence?prefix=${encodeURIComponent(prefix)}`, {
+    void fetch(`/api/inventory/sku-sequence?piece=${encodeURIComponent(piece)}`, {
       cache: "no-store",
       signal: controller.signal
     })
@@ -2722,14 +2724,29 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           throw new Error(payload?.error || "No se pudo calcular el siguiente SKU");
         }
 
+        const prefix = normalizeManualNomenclaturePrefix((payload?.prefix ?? "").toString());
+        if (!prefix.length) {
+          throw new Error("No se pudo resolver la nomenclatura de la pieza");
+        }
+
         const nextNumberRaw = Number(payload?.nextNumber ?? NaN);
         const nextNumber = Number.isFinite(nextNumberRaw) && nextNumberRaw > 0 ? Math.trunc(nextNumberRaw) : 1;
+        const previousPrefix = lastManualSuggestionPrefixRef.current;
+        const prefixChanged = previousPrefix !== prefix;
+        if (prefixChanged) {
+          setManualSkuEdited(false);
+        }
+        lastManualSuggestionPrefixRef.current = prefix;
         manualSkuSequenceCacheRef.current.set(prefix, nextNumber);
+        setManualSkuSuggestionPrefix(prefix);
         applyManualSkuSuggestion(formatSkuFromPrefixNumber(prefix, nextNumber), prefixChanged);
       })
       .catch((error: any) => {
         if (error?.name === "AbortError") return;
         console.error("No se pudo obtener sugerencia de SKU", error);
+        setManualSkuSuggestion("");
+        setManualSkuSuggestionPrefix(null);
+        lastManualSuggestionPrefixRef.current = null;
         setManualSkuSuggestionError(error?.message || "No se pudo calcular el siguiente SKU");
       })
       .finally(() => {
@@ -2738,49 +2755,140 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         }
         setManualSkuSuggestionLoading(false);
       });
-  }, [applyManualSkuSuggestion, isManualOnly, resolvedManualSkuPrefix]);
+  }, [applyManualSkuSuggestion, form.pieza, isManualOnly, manualNomenclatureGroups]);
 
-  const addManualNomenclature = useCallback(() => {
-    const piece = normalizeManualNomenclaturePiece(manualNomenclatureDraft.piece);
-    const prefix = normalizeManualNomenclaturePrefix(manualNomenclatureDraft.prefix);
+  const createManualNomenclature = useCallback(async () => {
+    const prefix = normalizeManualNomenclaturePrefix(manualNomenclaturePrefixDraft);
 
-    if (!piece.length || !prefix.length) {
-      setMessage("Captura pieza y nomenclatura para guardar");
+    if (!prefix.length) {
+      setMessage("Captura una nomenclatura valida");
       return;
     }
 
-    setManualNomenclatures((current) => {
-      const nextId =
-        typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-          ? crypto.randomUUID()
-          : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setManualNomenclatureLoading(true);
+    setManualNomenclatureError(null);
 
-      const normalizedCurrent = current.map((entry) => ({
-        ...entry,
-        piece: normalizeManualNomenclaturePiece(entry.piece),
-        prefix: normalizeManualNomenclaturePrefix(entry.prefix)
-      }));
+    try {
+      const response = await fetch("/api/inventory/nomenclatures", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prefix })
+      });
+      const payload = await response.json().catch(() => ({}));
 
-      const existingIndex = normalizedCurrent.findIndex(
-        (entry) => normalizeManualNomenclaturePiece(entry.piece) === piece
-      );
-
-      if (existingIndex >= 0) {
-        const updated = [...normalizedCurrent];
-        updated[existingIndex] = { ...updated[existingIndex], piece, prefix };
-        return updated;
+      if (!response.ok) {
+        throw new Error(payload?.error || "No se pudo guardar la nomenclatura");
       }
 
-      return [...normalizedCurrent, { id: nextId, piece, prefix }];
-    });
+      const createdId = (payload?.id ?? "").toString();
+      setManualNomenclaturePrefixDraft("");
+      setMessage("Nomenclatura guardada");
+      await fetchManualNomenclatures(createdId || undefined);
+    } catch (error: any) {
+      console.error("No se pudo guardar la nomenclatura", error);
+      setManualNomenclatureError(error?.message || "No se pudo guardar la nomenclatura");
+    } finally {
+      setManualNomenclatureLoading(false);
+    }
+  }, [fetchManualNomenclatures, manualNomenclaturePrefixDraft]);
 
-    setManualNomenclatureDraft({ piece: "", prefix: "" });
-    setMessage("Nomenclatura guardada");
-  }, [manualNomenclatureDraft.piece, manualNomenclatureDraft.prefix]);
+  const addPieceToManualNomenclature = useCallback(async () => {
+    const piece = normalizeManualNomenclaturePiece(manualNomenclaturePieceDraft);
+    const nomenclatureId = manualNomenclatureSelectedId;
 
-  const removeManualNomenclature = useCallback((id: string) => {
-    setManualNomenclatures((current) => current.filter((entry) => entry.id !== id));
-  }, []);
+    if (!nomenclatureId) {
+      setMessage("Primero selecciona una nomenclatura");
+      return;
+    }
+    if (!piece.length) {
+      setMessage("Captura una pieza valida");
+      return;
+    }
+
+    setManualNomenclatureLoading(true);
+    setManualNomenclatureError(null);
+
+    try {
+      const response = await fetch("/api/inventory/nomenclatures", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nomenclatureId, piece })
+      });
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload?.error || "No se pudo guardar la pieza");
+      }
+
+      setManualNomenclaturePieceDraft("");
+      setMessage("Pieza asignada a nomenclatura");
+      await fetchManualNomenclatures(nomenclatureId);
+    } catch (error: any) {
+      console.error("No se pudo guardar la pieza", error);
+      setManualNomenclatureError(error?.message || "No se pudo guardar la pieza");
+    } finally {
+      setManualNomenclatureLoading(false);
+    }
+  }, [fetchManualNomenclatures, manualNomenclaturePieceDraft, manualNomenclatureSelectedId]);
+
+  const removeManualNomenclature = useCallback(async (nomenclatureId: string) => {
+    const confirmed = window.confirm("¿Eliminar esta nomenclatura y todas sus piezas?");
+    if (!confirmed) return;
+
+    setManualNomenclatureLoading(true);
+    setManualNomenclatureError(null);
+
+    try {
+      const response = await fetch("/api/inventory/nomenclatures", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nomenclatureId })
+      });
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload?.error || "No se pudo eliminar la nomenclatura");
+      }
+
+      setMessage("Nomenclatura eliminada");
+      const preferredId = manualNomenclatureSelectedId === nomenclatureId ? undefined : manualNomenclatureSelectedId;
+      await fetchManualNomenclatures(preferredId);
+    } catch (error: any) {
+      console.error("No se pudo eliminar la nomenclatura", error);
+      setManualNomenclatureError(error?.message || "No se pudo eliminar la nomenclatura");
+    } finally {
+      setManualNomenclatureLoading(false);
+    }
+  }, [fetchManualNomenclatures, manualNomenclatureSelectedId]);
+
+  const removeManualNomenclaturePiece = useCallback(async (pieceId: string) => {
+    const confirmed = window.confirm("¿Eliminar esta pieza de la nomenclatura?");
+    if (!confirmed) return;
+
+    setManualNomenclatureLoading(true);
+    setManualNomenclatureError(null);
+
+    try {
+      const response = await fetch("/api/inventory/nomenclatures", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pieceId })
+      });
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload?.error || "No se pudo eliminar la pieza");
+      }
+
+      setMessage("Pieza eliminada");
+      await fetchManualNomenclatures(manualNomenclatureSelectedId || undefined);
+    } catch (error: any) {
+      console.error("No se pudo eliminar la pieza", error);
+      setManualNomenclatureError(error?.message || "No se pudo eliminar la pieza");
+    } finally {
+      setManualNomenclatureLoading(false);
+    }
+  }, [fetchManualNomenclatures, manualNomenclatureSelectedId]);
 
   const anoDesdeNumber = form.anoDesde ? Number(form.anoDesde) : undefined;
   const anoHastaNumber = form.anoHasta ? Number(form.anoHasta) : undefined;
@@ -4533,7 +4641,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                               </>
                             ) : (
                               <span>
-                                Agrega una regla en la pestaña Nomenclaturas para autollenar el siguiente SKU.
+                                Configura una coincidencia exacta en Nomenclaturas para autollenar el siguiente SKU.
                               </span>
                             )}
                             {manualSkuSuggestionError && (
@@ -4556,70 +4664,134 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                     </form>
                   ) : (
                     <div className="space-y-3 rounded-xl border border-slate-700 bg-slate-900/60 p-3">
-                      <p className="text-xs text-slate-400">
-                        Crea reglas PIEZA → NOMENCLATURA para que el SKU se autogenere con el siguiente consecutivo.
-                      </p>
-                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-[2fr_1fr_auto]">
-                        <input
-                          className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
-                          placeholder="Pieza (ej. FARO)"
-                          value={manualNomenclatureDraft.piece}
-                          onChange={(e) =>
-                            setManualNomenclatureDraft((current) => ({
-                              ...current,
-                              piece: e.target.value.toUpperCase()
-                            }))
-                          }
-                        />
-                        <input
-                          className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
-                          placeholder="Nomenclatura (ej. FAR)"
-                          value={manualNomenclatureDraft.prefix}
-                          onChange={(e) =>
-                            setManualNomenclatureDraft((current) => ({
-                              ...current,
-                              prefix: e.target.value.toUpperCase()
-                            }))
-                          }
-                        />
-                        <button
-                          type="button"
-                          onClick={addManualNomenclature}
-                          className="rounded-md border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-amber-200 hover:bg-amber-500/20"
-                        >
-                          Guardar
-                        </button>
+                      <div className="space-y-2">
+                        <p className="text-xs text-slate-400">
+                          1) Crea primero la nomenclatura (ej. FAR). 2) Después agrega las piezas exactas que deben usar esa nomenclatura.
+                        </p>
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto]">
+                          <input
+                            className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                            placeholder="Nomenclatura (ej. FAR)"
+                            value={manualNomenclaturePrefixDraft}
+                            onChange={(e) => setManualNomenclaturePrefixDraft(e.target.value.toUpperCase())}
+                          />
+                          <button
+                            type="button"
+                            onClick={createManualNomenclature}
+                            disabled={manualNomenclatureLoading}
+                            className="rounded-md border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-amber-200 hover:bg-amber-500/20 disabled:opacity-60"
+                          >
+                            Crear nomenclatura
+                          </button>
+                        </div>
                       </div>
 
-                      {manualNomenclatures.length > 0 ? (
+                      {manualNomenclatureGroups.length > 0 ? (
                         <div className="space-y-2">
-                          {manualNomenclatures
-                            .slice()
-                            .sort((a, b) => a.piece.localeCompare(b.piece))
-                            .map((entry) => (
+                          <p className="text-xs text-slate-400">Nomenclaturas registradas</p>
+                          {manualNomenclatureGroups.map((group) => {
+                            const isSelected = group.id === manualNomenclatureSelectedId;
+                            return (
                               <div
-                                key={entry.id}
-                                className="flex flex-col gap-2 rounded-lg border border-slate-700 bg-slate-950/60 p-2 sm:flex-row sm:items-center sm:justify-between"
+                                key={group.id}
+                                className={`flex flex-col gap-2 rounded-lg border p-2 sm:flex-row sm:items-center sm:justify-between ${
+                                  isSelected
+                                    ? "border-emerald-400/50 bg-emerald-500/10"
+                                    : "border-slate-700 bg-slate-950/60"
+                                }`}
                               >
-                                <div className="text-sm text-slate-200">
-                                  <span className="font-semibold text-slate-100">{entry.piece}</span>
-                                  <span className="mx-2 text-slate-500">→</span>
-                                  <span className="font-mono tracking-wide text-emerald-200">{entry.prefix}</span>
-                                </div>
                                 <button
                                   type="button"
-                                  onClick={() => removeManualNomenclature(entry.id)}
+                                  onClick={() => setManualNomenclatureSelectedId(group.id)}
+                                  className="text-left text-sm text-slate-100"
+                                >
+                                  <span className="font-mono font-semibold tracking-wide text-emerald-200">{group.prefix}</span>
+                                  <span className="ml-2 text-xs text-slate-400">{group.pieces.length} piezas</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => removeManualNomenclature(group.id)}
                                   className="self-start rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-rose-200 hover:bg-rose-500/20 sm:self-auto"
                                 >
-                                  Eliminar
+                                  Eliminar nomenclatura
                                 </button>
                               </div>
-                            ))}
+                            );
+                          })}
                         </div>
                       ) : (
                         <p className="text-sm text-slate-400">Todavia no hay nomenclaturas configuradas.</p>
                       )}
 
+                      <div className="space-y-2 rounded-lg border border-slate-700 bg-slate-950/40 p-2">
+                        <p className="text-xs text-slate-400">
+                          Agrega piezas exactas a la nomenclatura seleccionada (ej. FARO DERECHO, FARO IZQUIERDO).
+                        </p>
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_2fr_auto]">
+                          <select
+                            className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                            value={manualNomenclatureSelectedId}
+                            onChange={(e) => setManualNomenclatureSelectedId(e.target.value)}
+                            disabled={!manualNomenclatureGroups.length}
+                          >
+                            {!manualNomenclatureGroups.length && <option value="">Sin nomenclaturas</option>}
+                            {manualNomenclatureGroups.map((group) => (
+                              <option key={group.id} value={group.id}>
+                                {group.prefix}
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                            placeholder="Pieza exacta (ej. FARO DERECHO)"
+                            value={manualNomenclaturePieceDraft}
+                            onChange={(e) => setManualNomenclaturePieceDraft(e.target.value.toUpperCase())}
+                            disabled={!manualNomenclatureGroups.length}
+                          />
+                          <button
+                            type="button"
+                            onClick={addPieceToManualNomenclature}
+                            disabled={!manualNomenclatureGroups.length || manualNomenclatureLoading}
+                            className="rounded-md border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-amber-200 hover:bg-amber-500/20 disabled:opacity-60"
+                          >
+                            Agregar pieza
+                          </button>
+                        </div>
+                      </div>
+
+                      {selectedManualNomenclature ? (
+                        <div className="space-y-2">
+                          <p className="text-xs text-slate-400">
+                            Piezas exactas para <span className="font-mono text-emerald-200">{selectedManualNomenclature.prefix}</span>
+                          </p>
+                          {selectedManualNomenclature.pieces.length > 0 ? (
+                            <div className="space-y-2">
+                              {selectedManualNomenclature.pieces.map((pieceEntry) => (
+                                <div
+                                  key={pieceEntry.id}
+                                  className="flex flex-col gap-2 rounded-lg border border-slate-700 bg-slate-950/60 p-2 sm:flex-row sm:items-center sm:justify-between"
+                                >
+                                  <span className="text-sm text-slate-100">{pieceEntry.piece}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeManualNomenclaturePiece(pieceEntry.id)}
+                                    className="self-start rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-rose-200 hover:bg-rose-500/20 sm:self-auto"
+                                  >
+                                    Eliminar pieza
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-sm text-slate-400">Esta nomenclatura todavía no tiene piezas.</p>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-slate-400">Selecciona una nomenclatura para ver y administrar sus piezas.</p>
+                      )}
+
+                      {manualNomenclatureLoading && <span className="text-sm text-slate-300">Actualizando nomenclaturas...</span>}
+                      {manualNomenclatureError && <span className="text-sm text-rose-300">{manualNomenclatureError}</span>}
                       {message && <span className="text-sm text-amber-300">{message}</span>}
                     </div>
                   )}

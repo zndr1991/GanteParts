@@ -15,6 +15,8 @@ const normalizePrefix = (value: string) =>
     .replace(/[^A-Z0-9]/g, "")
     .slice(0, 12);
 
+const normalizePiece = (value: string) => value.trim().toUpperCase().replace(/\s+/g, " ");
+
 const formatSku = (prefix: string, number: number) =>
   `${prefix}-${String(number).padStart(SKU_PADDING, "0")}`;
 
@@ -25,11 +27,37 @@ export async function GET(req: Request) {
   }
 
   const { searchParams } = new URL(req.url);
-  const prefix = normalizePrefix(searchParams.get("prefix") ?? "");
+  const requestedPrefix = normalizePrefix(searchParams.get("prefix") ?? "");
+  const requestedPiece = normalizePiece(searchParams.get("piece") ?? "");
+
+  let prefix = requestedPrefix;
+
+  if (requestedPiece.length) {
+    const resolved = await prisma.skuNomenclaturePiece.findUnique({
+      where: { piece: requestedPiece },
+      include: {
+        nomenclature: {
+          select: { prefix: true }
+        }
+      }
+    });
+
+    if (!resolved?.nomenclature?.prefix) {
+      return NextResponse.json(
+        {
+          error:
+            "No existe una nomenclatura exacta para esa pieza. Configura la pieza completa en la pestaña de nomenclaturas."
+        },
+        { status: 404 }
+      );
+    }
+
+    prefix = normalizePrefix(resolved.nomenclature.prefix);
+  }
 
   if (!prefix.length) {
     return NextResponse.json(
-      { error: "Debes enviar un prefijo valido en el parametro prefix" },
+      { error: "Debes enviar una pieza exacta o un prefijo valido" },
       { status: 400 }
     );
   }
@@ -64,6 +92,7 @@ export async function GET(req: Request) {
 
     return NextResponse.json({
       prefix,
+      piece: requestedPiece || null,
       nextNumber,
       sku: formatSku(prefix, nextNumber),
       padding: SKU_PADDING
