@@ -101,6 +101,12 @@ type InventoryPageCachePayload = {
   facetOptions: InventoryFacetOptions | null;
 };
 
+type ManualNomenclatureEntry = {
+  id: string;
+  piece: string;
+  prefix: string;
+};
+
 type FinanceEntryType = "income" | "expense";
 
 type SoldFinanceRegistrationResult =
@@ -199,6 +205,11 @@ const INVENTORY_PAGE_BLOCK_SIZE = 40;
 const SERVER_SEARCH_DEBOUNCE_MS = 320;
 const INVENTORY_PAGE_CACHE_TTL_MS = 25_000;
 const INVENTORY_LOADING_INDICATOR_DELAY_MS = 180;
+const MANUAL_SKU_NUMBER_PADDING = 5;
+const MANUAL_NOMENCLATURE_STORAGE_KEY = "inventory.manual.nomenclatures.v1";
+const DEFAULT_MANUAL_NOMENCLATURES: ManualNomenclatureEntry[] = [
+  { id: "default-faro", piece: "FARO", prefix: "FAR" }
+];
 
 const makePhotoKey = (file: File) => `${file.name}-${file.size}-${file.lastModified}`;
 
@@ -507,6 +518,32 @@ const buildInventoryPageCacheKey = (options: {
   });
 };
 
+const normalizeTextComparable = (value: string) =>
+  value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .trim();
+
+const normalizeManualNomenclaturePiece = (value: string) =>
+  normalizeTextComparable(value).replace(/\s+/g, " ");
+
+const normalizeManualNomenclaturePrefix = (value: string) =>
+  normalizeTextComparable(value).replace(/[^A-Z0-9]/g, "");
+
+const formatSkuFromPrefixNumber = (prefix: string, number: number) => {
+  const safe = Number.isFinite(number) && number > 0 ? Math.trunc(number) : 1;
+  return `${prefix}-${String(safe).padStart(MANUAL_SKU_NUMBER_PADDING, "0")}`;
+};
+
+const parseSkuSuffixNumber = (sku: string, prefix: string) => {
+  const match = sku.toUpperCase().match(new RegExp(`^${prefix}-([0-9]+)$`));
+  if (!match?.[1]) return null;
+  const parsed = Number.parseInt(match[1], 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return parsed;
+};
+
 const normalizePrestadoMetrics = (value: unknown) => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
 
@@ -592,6 +629,7 @@ const getStatusBadgeClass = (status?: string | null) => {
 
 export function InventoryClient({ initialPage, userRole, mode = "full" }: InventoryClientProps) {
   const isManualOnly = mode === "manual-only";
+  const [manualTab, setManualTab] = useState<"capture" | "nomenclatures">("capture");
   const [items, setItems] = useState<Item[]>(initialPage.items);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [search, setSearch] = useState("");
@@ -616,6 +654,15 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     precioCompra: "",
     ubicacion: ""
   });
+  const [manualNomenclatures, setManualNomenclatures] = useState<ManualNomenclatureEntry[]>(
+    DEFAULT_MANUAL_NOMENCLATURES
+  );
+  const [manualNomenclatureDraft, setManualNomenclatureDraft] = useState({ piece: "", prefix: "" });
+  const [manualNomenclatureReady, setManualNomenclatureReady] = useState(false);
+  const [manualSkuSuggestion, setManualSkuSuggestion] = useState<string>("");
+  const [manualSkuSuggestionLoading, setManualSkuSuggestionLoading] = useState(false);
+  const [manualSkuSuggestionError, setManualSkuSuggestionError] = useState<string | null>(null);
+  const [manualSkuEdited, setManualSkuEdited] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [uploadErrors, setUploadErrors] = useState<string[]>([]);
@@ -679,6 +726,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const inventoryPageCacheRef = useRef<Map<string, { expiresAt: number; payload: InventoryPageCachePayload }>>(
     new Map()
   );
+  const manualSkuSequenceCacheRef = useRef(new Map<string, number>());
+  const manualSkuRequestAbortRef = useRef<AbortController | null>(null);
+  const lastManualSuggestionPrefixRef = useRef<string | null>(null);
   const isMountedRef = useRef(true);
   const desktopTableContainerRef = useRef<HTMLDivElement | null>(null);
   const localEstatusInternoRef = useRef(
@@ -906,6 +956,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       if (inventoryRequestAbortRef.current) {
         inventoryRequestAbortRef.current.abort();
         inventoryRequestAbortRef.current = null;
+      }
+      if (manualSkuRequestAbortRef.current) {
+        manualSkuRequestAbortRef.current.abort();
+        manualSkuRequestAbortRef.current = null;
       }
     };
   }, []);
@@ -1996,8 +2050,15 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         extraDataPayload.photos = photosPayload;
       }
 
+      const skuInput = toUpper(form.skuInternal) ?? "";
+      const suggestedSku = resolvedManualSkuPrefix ? manualSkuSuggestion : "";
+      const resolvedSkuInternal = skuInput || suggestedSku;
+      if (!resolvedSkuInternal) {
+        throw new Error("No se pudo generar el SKU. Revisa la nomenclatura de la pieza.");
+      }
+
       const payload = {
-        skuInternal: toUpper(form.skuInternal) ?? "",
+        skuInternal: resolvedSkuInternal,
         mlItemId: toUpper(form.mlItemId) ?? undefined,
         status: "active",
         price: form.price ? Number(form.price) : undefined,
@@ -2028,6 +2089,17 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         precioCompra: "",
         ubicacion: ""
       });
+      setManualSkuEdited(false);
+
+      const usedPrefix = resolvedManualSkuPrefix;
+      const usedNumber = usedPrefix ? parseSkuSuffixNumber(resolvedSkuInternal, usedPrefix) : null;
+      if (usedPrefix && usedNumber) {
+        const cached = manualSkuSequenceCacheRef.current.get(usedPrefix) ?? 1;
+        const nextNumber = Math.max(cached, usedNumber + 1);
+        manualSkuSequenceCacheRef.current.set(usedPrefix, nextNumber);
+        setManualSkuSuggestion(formatSkuFromPrefixNumber(usedPrefix, nextNumber));
+      }
+
       clearManualPhotos();
       setMessage("Item creado");
       await refresh();
@@ -2522,6 +2594,193 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       .map((c) => c.toUpperCase());
     return Array.from(new Set([...base, ...existing])).sort();
   }, [inventoryEditForm?.marca, items]);
+
+  const resolvedManualSkuPrefix = useMemo(() => {
+    const piece = normalizeManualNomenclaturePiece(form.pieza);
+    if (!piece.length) return null;
+
+    const best = manualNomenclatures.reduce<{ prefix: string; score: number } | null>((current, entry) => {
+      const normalizedPiece = normalizeManualNomenclaturePiece(entry.piece);
+      const normalizedPrefix = normalizeManualNomenclaturePrefix(entry.prefix);
+      if (!normalizedPiece.length || !normalizedPrefix.length) return current;
+      if (!piece.includes(normalizedPiece)) return current;
+
+      const score = normalizedPiece.length;
+      if (!current || score > current.score) {
+        return { prefix: normalizedPrefix, score };
+      }
+
+      return current;
+    }, null);
+
+    return best ? best.prefix : null;
+  }, [form.pieza, manualNomenclatures]);
+
+  const applyManualSkuSuggestion = useCallback((suggestion: string, force = false) => {
+    const normalized = suggestion.trim().toUpperCase();
+    if (!normalized.length) return;
+    setManualSkuSuggestion(normalized);
+    setForm((current) => {
+      const currentSku = (current.skuInternal ?? "").toString().trim().toUpperCase();
+      if (!force && manualSkuEdited && currentSku.length) return current;
+      if (currentSku === normalized) return current;
+      return { ...current, skuInternal: normalized };
+    });
+  }, [manualSkuEdited]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    try {
+      const raw = window.localStorage.getItem(MANUAL_NOMENCLATURE_STORAGE_KEY);
+      if (!raw) {
+        setManualNomenclatureReady(true);
+        return;
+      }
+
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        setManualNomenclatureReady(true);
+        return;
+      }
+
+      const normalized = parsed
+        .map((entry) => {
+          if (!entry || typeof entry !== "object") return null;
+          const source = entry as Record<string, unknown>;
+          const piece = normalizeManualNomenclaturePiece((source.piece ?? "").toString());
+          const prefix = normalizeManualNomenclaturePrefix((source.prefix ?? "").toString());
+          if (!piece.length || !prefix.length) return null;
+          const idRaw = (source.id ?? "").toString().trim();
+          const id = idRaw.length ? idRaw : `${piece}-${prefix}`;
+          return { id, piece, prefix } satisfies ManualNomenclatureEntry;
+        })
+        .filter((entry): entry is ManualNomenclatureEntry => Boolean(entry));
+
+      if (normalized.length) {
+        setManualNomenclatures(normalized);
+      }
+    } catch (error) {
+      console.error("No se pudieron cargar las nomenclaturas manuales", error);
+    } finally {
+      setManualNomenclatureReady(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!manualNomenclatureReady || typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(MANUAL_NOMENCLATURE_STORAGE_KEY, JSON.stringify(manualNomenclatures));
+    } catch (error) {
+      console.error("No se pudieron guardar las nomenclaturas manuales", error);
+    }
+  }, [manualNomenclatureReady, manualNomenclatures]);
+
+  useEffect(() => {
+    if (!isManualOnly) return;
+
+    if (manualSkuRequestAbortRef.current) {
+      manualSkuRequestAbortRef.current.abort();
+      manualSkuRequestAbortRef.current = null;
+    }
+
+    setManualSkuSuggestionError(null);
+
+    const prefix = resolvedManualSkuPrefix;
+    if (!prefix) {
+      setManualSkuSuggestion("");
+      setManualSkuSuggestionLoading(false);
+      lastManualSuggestionPrefixRef.current = null;
+      return;
+    }
+
+    const previousPrefix = lastManualSuggestionPrefixRef.current;
+    const prefixChanged = previousPrefix !== prefix;
+    if (prefixChanged) {
+      setManualSkuEdited(false);
+    }
+    lastManualSuggestionPrefixRef.current = prefix;
+
+    const cachedNext = manualSkuSequenceCacheRef.current.get(prefix);
+    if (cachedNext && Number.isFinite(cachedNext) && cachedNext > 0) {
+      applyManualSkuSuggestion(formatSkuFromPrefixNumber(prefix, cachedNext), prefixChanged);
+      setManualSkuSuggestionLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    manualSkuRequestAbortRef.current = controller;
+    setManualSkuSuggestionLoading(true);
+
+    void fetch(`/api/inventory/sku-sequence?prefix=${encodeURIComponent(prefix)}`, {
+      cache: "no-store",
+      signal: controller.signal
+    })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload?.error || "No se pudo calcular el siguiente SKU");
+        }
+
+        const nextNumberRaw = Number(payload?.nextNumber ?? NaN);
+        const nextNumber = Number.isFinite(nextNumberRaw) && nextNumberRaw > 0 ? Math.trunc(nextNumberRaw) : 1;
+        manualSkuSequenceCacheRef.current.set(prefix, nextNumber);
+        applyManualSkuSuggestion(formatSkuFromPrefixNumber(prefix, nextNumber), prefixChanged);
+      })
+      .catch((error: any) => {
+        if (error?.name === "AbortError") return;
+        console.error("No se pudo obtener sugerencia de SKU", error);
+        setManualSkuSuggestionError(error?.message || "No se pudo calcular el siguiente SKU");
+      })
+      .finally(() => {
+        if (manualSkuRequestAbortRef.current === controller) {
+          manualSkuRequestAbortRef.current = null;
+        }
+        setManualSkuSuggestionLoading(false);
+      });
+  }, [applyManualSkuSuggestion, isManualOnly, resolvedManualSkuPrefix]);
+
+  const addManualNomenclature = useCallback(() => {
+    const piece = normalizeManualNomenclaturePiece(manualNomenclatureDraft.piece);
+    const prefix = normalizeManualNomenclaturePrefix(manualNomenclatureDraft.prefix);
+
+    if (!piece.length || !prefix.length) {
+      setMessage("Captura pieza y nomenclatura para guardar");
+      return;
+    }
+
+    setManualNomenclatures((current) => {
+      const nextId =
+        typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+      const normalizedCurrent = current.map((entry) => ({
+        ...entry,
+        piece: normalizeManualNomenclaturePiece(entry.piece),
+        prefix: normalizeManualNomenclaturePrefix(entry.prefix)
+      }));
+
+      const existingIndex = normalizedCurrent.findIndex(
+        (entry) => normalizeManualNomenclaturePiece(entry.piece) === piece
+      );
+
+      if (existingIndex >= 0) {
+        const updated = [...normalizedCurrent];
+        updated[existingIndex] = { ...updated[existingIndex], piece, prefix };
+        return updated;
+      }
+
+      return [...normalizedCurrent, { id: nextId, piece, prefix }];
+    });
+
+    setManualNomenclatureDraft({ piece: "", prefix: "" });
+    setMessage("Nomenclatura guardada");
+  }, [manualNomenclatureDraft.piece, manualNomenclatureDraft.prefix]);
+
+  const removeManualNomenclature = useCallback((id: string) => {
+    setManualNomenclatures((current) => current.filter((entry) => entry.id !== id));
+  }, []);
 
   const anoDesdeNumber = form.anoDesde ? Number(form.anoDesde) : undefined;
   const anoHastaNumber = form.anoHasta ? Number(form.anoHasta) : undefined;
@@ -3917,320 +4176,454 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           <div className={isManualOnly ? "block" : isMobile && !sectionVisibility.manual ? "hidden" : "block"}>
             {isManualOnly ? (
               canCreateManual ? (
-                <form
-                  className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-3"
-                  onSubmit={onSubmit}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                    }
-                  }}
-                >
-            <input
-              className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
-              placeholder="SKU interno *"
-              list="sku-options"
-              value={form.skuInternal}
-              onChange={(e) => setForm((f) => ({ ...f, skuInternal: e.target.value.toUpperCase() }))}
-              required
-            />
-            <input
-              className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
-              placeholder="Codigo ML"
-              value={form.mlItemId}
-              onChange={(e) => setForm((f) => ({ ...f, mlItemId: e.target.value.toUpperCase() }))}
-            />
-            <select
-              className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
-              value={form.estatusInterno}
-              onChange={(e) => setForm((f) => ({ ...f, estatusInterno: e.target.value }))}
-            >
-              <option value="">Estatus interno</option>
-              {sortedEstatusInternoOptions.map((opt) => (
-                <option key={opt} value={opt}>
-                  {opt}
-                </option>
-              ))}
-            </select>
-            <input
-              className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
-              placeholder="Stock"
-              value={form.stock}
-              onChange={(e) => setForm((f) => ({ ...f, stock: e.target.value }))}
-            />
-            <input
-              className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
-              placeholder="Pieza"
-              value={form.pieza}
-              onChange={(e) => setForm((f) => ({ ...f, pieza: e.target.value.toUpperCase() }))}
-              list="pieza-options"
-            />
-            <input
-              className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
-              list="brand-options"
-              placeholder="Marca"
-              value={form.marca}
-              onChange={(e) => setForm((f) => ({ ...f, marca: e.target.value.toUpperCase(), coche: "" }))}
-            />
-            <input
-              className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
-              list="model-options"
-              placeholder={form.marca ? "Coche" : "Coche (elige o escribe)"}
-              value={form.coche}
-              onChange={(e) => setForm((f) => ({ ...f, coche: e.target.value.toUpperCase() }))}
-              disabled={!form.marca && modelOptions.length > 0}
-            />
-            <input
-              className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
-              placeholder="Año desde"
-              type="number"
-              min="1950"
-              max="2100"
-              value={form.anoDesde}
-              onChange={(e) => setForm((f) => ({ ...f, anoDesde: e.target.value }))}
-            />
-            <input
-              className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
-              placeholder="Año hasta"
-              type="number"
-              min="1950"
-              max="2100"
-              value={form.anoHasta}
-              onChange={(e) => setForm((f) => ({ ...f, anoHasta: e.target.value }))}
-            />
-            <select
-              className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
-              value={form.origen}
-              onChange={(e) => setForm((f) => ({ ...f, origen: e.target.value }))}
-            >
-              <option value="">Origen</option>
-              {sortedOrigenOptions.map((opt) => (
-                <option key={opt} value={opt}>
-                  {opt}
-                </option>
-              ))}
-            </select>
-            <input
-              className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
-              placeholder="Precio"
-              value={form.price}
-              onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))}
-            />
-            <input
-              className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
-              placeholder="Precio de compra"
-              value={form.precioCompra}
-              onChange={(e) => setForm((f) => ({ ...f, precioCompra: e.target.value }))}
-            />
-            <input
-              className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
-              list="ubicacion-options"
-              placeholder="Ubicacion"
-              value={form.ubicacion}
-              onChange={(e) => setForm((f) => ({ ...f, ubicacion: e.target.value.toUpperCase() }))}
-            />
-            <div className="sm:col-span-3 space-y-3">
-              <div className="flex items-center justify-between text-xs text-slate-400">
-                <span>Fotos (hasta {MAX_PHOTOS} imagenes)</span>
-                <span>
-                  {photoFiles.length} / {MAX_PHOTOS}
-                </span>
-              </div>
-              <input
-                ref={photoInputRef}
-                type="file"
-                accept="image/*"
-                multiple
-                className="hidden"
-                onChange={(e) => {
-                  handleManualPhotoFiles(e.target.files);
-                  e.currentTarget.value = "";
-                }}
-              />
-              <input
-                ref={cameraInputRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                multiple
-                className="hidden"
-                onChange={(e) => {
-                  handleManualPhotoFiles(e.target.files);
-                  e.currentTarget.value = "";
-                }}
-              />
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className="rounded-md border border-slate-600 bg-slate-800/60 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-100 hover:bg-slate-700"
-                  onClick={() => photoInputRef.current?.click()}
-                >
-                  Elegir de galeria
-                </button>
-                <button
-                  type="button"
-                  className="rounded-md border border-amber-400/40 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-amber-200 hover:bg-amber-500/20"
-                  onClick={() => cameraInputRef.current?.click()}
-                >
-                  Tomar foto
-                </button>
-                {photoFiles.length > 0 && (
-                  <button
-                    type="button"
-                    className="rounded-md border border-slate-600/60 px-3 py-1.5 text-xs uppercase tracking-wide text-slate-300 hover:text-white"
-                    onClick={clearManualPhotos}
-                  >
-                    Limpiar todas
-                  </button>
-                )}
-              </div>
-              <p className="text-xs text-slate-400">
-                Puedes elegir imagenes de tu galeria o abrir directamente la camara. Luego edita, gira o agrega
-                notas antes de enviar la pieza.
-              </p>
-              {photoFiles.length > 0 && (
-                <div className="space-y-2">
-                  <p className="text-[11px] text-slate-400">
-                    La primera imagen queda como portada. Usa las flechas o el botón Portada para reordenar.
-                  </p>
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                    {photoFiles.map((file, index) => {
-                      const key = makePhotoKey(file);
-                      const isEdited = Boolean(editedPhotos[key]);
-                      const isCover = index === 0;
-                      const previewSrc = editedPhotos[key] || manualPhotoPreviewUrls[key] || "";
-                      return (
-                        <div
-                          key={`${file.name}-${file.lastModified}-${index}`}
-                          className={`rounded-lg border p-2 text-xs text-slate-200 ${
-                            isCover
-                              ? "border-emerald-400/60 bg-emerald-500/10"
-                              : "border-slate-700 bg-slate-900/70"
-                          }`}
-                        >
-                          <div className="relative overflow-hidden rounded-md border border-slate-700 bg-slate-950/70">
-                            {previewSrc ? (
-                              <img
-                                src={previewSrc}
-                                alt={`Miniatura ${index + 1}`}
-                                className="h-24 w-full object-cover"
-                                loading="lazy"
-                                decoding="async"
-                              />
-                            ) : (
-                              <div className="flex h-24 w-full items-center justify-center text-[10px] text-slate-500">
-                                Sin vista previa
-                              </div>
-                            )}
-                            <span className="absolute bottom-1 left-1 rounded bg-black/70 px-1.5 py-0.5 text-[10px] text-slate-100">
-                              {index + 1}
-                            </span>
-                            {isCover && (
-                              <span className="absolute right-1 top-1 rounded-full bg-emerald-500/90 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white">
-                                Portada
-                              </span>
-                            )}
+                <div className="space-y-3">
+                  <div className="inline-flex rounded-lg border border-slate-700 bg-slate-900/70 p-1">
+                    <button
+                      type="button"
+                      className={`rounded-md px-3 py-1.5 text-xs font-semibold uppercase tracking-wide transition ${
+                        manualTab === "capture"
+                          ? "bg-emerald-500/20 text-emerald-100"
+                          : "text-slate-300 hover:text-slate-100"
+                      }`}
+                      onClick={() => setManualTab("capture")}
+                    >
+                      Captura
+                    </button>
+                    <button
+                      type="button"
+                      className={`rounded-md px-3 py-1.5 text-xs font-semibold uppercase tracking-wide transition ${
+                        manualTab === "nomenclatures"
+                          ? "bg-amber-500/20 text-amber-100"
+                          : "text-slate-300 hover:text-slate-100"
+                      }`}
+                      onClick={() => setManualTab("nomenclatures")}
+                    >
+                      Nomenclaturas
+                    </button>
+                  </div>
+
+                  {manualTab === "capture" ? (
+                    <form
+                      className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-3"
+                      onSubmit={onSubmit}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                        }
+                      }}
+                    >
+                      <input
+                        className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                        placeholder="Codigo ML"
+                        value={form.mlItemId}
+                        onChange={(e) => setForm((f) => ({ ...f, mlItemId: e.target.value.toUpperCase() }))}
+                      />
+                      <select
+                        className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                        value={form.estatusInterno}
+                        onChange={(e) => setForm((f) => ({ ...f, estatusInterno: e.target.value }))}
+                      >
+                        <option value="">Estatus interno</option>
+                        {sortedEstatusInternoOptions.map((opt) => (
+                          <option key={opt} value={opt}>
+                            {opt}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                        placeholder="Stock"
+                        value={form.stock}
+                        onChange={(e) => setForm((f) => ({ ...f, stock: e.target.value }))}
+                      />
+                      <input
+                        className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                        placeholder="Pieza"
+                        value={form.pieza}
+                        onChange={(e) => setForm((f) => ({ ...f, pieza: e.target.value.toUpperCase() }))}
+                        list="pieza-options"
+                      />
+                      <input
+                        className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                        list="brand-options"
+                        placeholder="Marca"
+                        value={form.marca}
+                        onChange={(e) => setForm((f) => ({ ...f, marca: e.target.value.toUpperCase(), coche: "" }))}
+                      />
+                      <input
+                        className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                        list="model-options"
+                        placeholder={form.marca ? "Coche" : "Coche (elige o escribe)"}
+                        value={form.coche}
+                        onChange={(e) => setForm((f) => ({ ...f, coche: e.target.value.toUpperCase() }))}
+                        disabled={!form.marca && modelOptions.length > 0}
+                      />
+                      <input
+                        className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                        placeholder="Año desde"
+                        type="number"
+                        min="1950"
+                        max="2100"
+                        value={form.anoDesde}
+                        onChange={(e) => setForm((f) => ({ ...f, anoDesde: e.target.value }))}
+                      />
+                      <input
+                        className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                        placeholder="Año hasta"
+                        type="number"
+                        min="1950"
+                        max="2100"
+                        value={form.anoHasta}
+                        onChange={(e) => setForm((f) => ({ ...f, anoHasta: e.target.value }))}
+                      />
+                      <select
+                        className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                        value={form.origen}
+                        onChange={(e) => setForm((f) => ({ ...f, origen: e.target.value }))}
+                      >
+                        <option value="">Origen</option>
+                        {sortedOrigenOptions.map((opt) => (
+                          <option key={opt} value={opt}>
+                            {opt}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                        placeholder="Precio"
+                        value={form.price}
+                        onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))}
+                      />
+                      <input
+                        className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                        placeholder="Precio de compra"
+                        value={form.precioCompra}
+                        onChange={(e) => setForm((f) => ({ ...f, precioCompra: e.target.value }))}
+                      />
+                      <input
+                        className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                        list="ubicacion-options"
+                        placeholder="Ubicacion"
+                        value={form.ubicacion}
+                        onChange={(e) => setForm((f) => ({ ...f, ubicacion: e.target.value.toUpperCase() }))}
+                      />
+
+                      <div className="sm:col-span-3 space-y-3">
+                        <div className="flex items-center justify-between text-xs text-slate-400">
+                          <span>Fotos (hasta {MAX_PHOTOS} imagenes)</span>
+                          <span>
+                            {photoFiles.length} / {MAX_PHOTOS}
+                          </span>
+                        </div>
+                        <input
+                          ref={photoInputRef}
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          className="hidden"
+                          onChange={(e) => {
+                            handleManualPhotoFiles(e.target.files);
+                            e.currentTarget.value = "";
+                          }}
+                        />
+                        <input
+                          ref={cameraInputRef}
+                          type="file"
+                          accept="image/*"
+                          capture="environment"
+                          multiple
+                          className="hidden"
+                          onChange={(e) => {
+                            handleManualPhotoFiles(e.target.files);
+                            e.currentTarget.value = "";
+                          }}
+                        />
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            className="rounded-md border border-slate-600 bg-slate-800/60 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-100 hover:bg-slate-700"
+                            onClick={() => photoInputRef.current?.click()}
+                          >
+                            Elegir de galeria
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded-md border border-amber-400/40 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-amber-200 hover:bg-amber-500/20"
+                            onClick={() => cameraInputRef.current?.click()}
+                          >
+                            Tomar foto
+                          </button>
+                          {photoFiles.length > 0 && (
+                            <button
+                              type="button"
+                              className="rounded-md border border-slate-600/60 px-3 py-1.5 text-xs uppercase tracking-wide text-slate-300 hover:text-white"
+                              onClick={clearManualPhotos}
+                            >
+                              Limpiar todas
+                            </button>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-400">
+                          Puedes elegir imagenes de tu galeria o abrir directamente la camara. Luego edita, gira o agrega
+                          notas antes de enviar la pieza.
+                        </p>
+                        {photoFiles.length > 0 && (
+                          <div className="space-y-2">
+                            <p className="text-[11px] text-slate-400">
+                              La primera imagen queda como portada. Usa las flechas o el botón Portada para reordenar.
+                            </p>
+                            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                              {photoFiles.map((file, index) => {
+                                const key = makePhotoKey(file);
+                                const isEdited = Boolean(editedPhotos[key]);
+                                const isCover = index === 0;
+                                const previewSrc = editedPhotos[key] || manualPhotoPreviewUrls[key] || "";
+                                return (
+                                  <div
+                                    key={`${file.name}-${file.lastModified}-${index}`}
+                                    className={`rounded-lg border p-2 text-xs text-slate-200 ${
+                                      isCover
+                                        ? "border-emerald-400/60 bg-emerald-500/10"
+                                        : "border-slate-700 bg-slate-900/70"
+                                    }`}
+                                  >
+                                    <div className="relative overflow-hidden rounded-md border border-slate-700 bg-slate-950/70">
+                                      {previewSrc ? (
+                                        <img
+                                          src={previewSrc}
+                                          alt={`Miniatura ${index + 1}`}
+                                          className="h-24 w-full object-cover"
+                                          loading="lazy"
+                                          decoding="async"
+                                        />
+                                      ) : (
+                                        <div className="flex h-24 w-full items-center justify-center text-[10px] text-slate-500">
+                                          Sin vista previa
+                                        </div>
+                                      )}
+                                      <span className="absolute bottom-1 left-1 rounded bg-black/70 px-1.5 py-0.5 text-[10px] text-slate-100">
+                                        {index + 1}
+                                      </span>
+                                      {isCover && (
+                                        <span className="absolute right-1 top-1 rounded-full bg-emerald-500/90 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white">
+                                          Portada
+                                        </span>
+                                      )}
+                                    </div>
+                                    <p className="truncate" title={file.name}>
+                                      {file.name}
+                                    </p>
+                                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                                      {isEdited && (
+                                        <span className="rounded-full border border-emerald-400/50 bg-emerald-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-200">
+                                          Editada
+                                        </span>
+                                      )}
+                                      {!isCover && (
+                                        <button
+                                          type="button"
+                                          className="text-[11px] text-emerald-300 hover:text-emerald-200"
+                                          onClick={() => setManualCoverPhoto(index)}
+                                        >
+                                          Portada
+                                        </button>
+                                      )}
+                                      <button
+                                        type="button"
+                                        className="text-[11px] text-slate-300 hover:text-slate-100 disabled:opacity-40"
+                                        onClick={() => moveManualPhoto(index, index - 1)}
+                                        disabled={index === 0}
+                                      >
+                                        ←
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="text-[11px] text-slate-300 hover:text-slate-100 disabled:opacity-40"
+                                        onClick={() => moveManualPhoto(index, index + 1)}
+                                        disabled={index >= photoFiles.length - 1}
+                                      >
+                                        →
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="text-[11px] text-amber-300 hover:text-amber-200"
+                                        onClick={() => openPhotoEditorForFile(file)}
+                                      >
+                                        Editar
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="text-[11px] text-rose-300 hover:text-rose-200"
+                                        onClick={() => removeManualPhoto(index)}
+                                      >
+                                        Quitar
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
                           </div>
-                          <p className="truncate" title={file.name}>
-                            {file.name}
-                          </p>
-                          <div className="mt-2 flex flex-wrap items-center gap-2">
-                            {isEdited && (
-                              <span className="rounded-full border border-emerald-400/50 bg-emerald-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-200">
-                                Editada
+                        )}
+                      </div>
+
+                      <datalist id="sku-options">
+                        {skuSuggestions.map((sku) => (
+                          <option key={sku} value={sku} />
+                        ))}
+                      </datalist>
+                      <datalist id="brand-options">
+                        {brandSuggestions.map((brand) => (
+                          <option key={brand} value={brand} />
+                        ))}
+                      </datalist>
+                      <datalist id="model-options">
+                        {modelOptions.map((model) => (
+                          <option key={model} value={model} />
+                        ))}
+                      </datalist>
+                      <datalist id="ubicacion-options">
+                        {ubicacionSuggestions.map((u) => (
+                          <option key={u} value={u} />
+                        ))}
+                      </datalist>
+                      <datalist id="pieza-options">
+                        {Array.from(
+                          new Set(
+                            items
+                              .map((item) => item.extraData?.pieza)
+                              .filter((p): p is string => Boolean(p && p.trim()))
+                          )
+                        )
+                          .sort()
+                          .map((pieza) => (
+                            <option key={pieza} value={pieza} />
+                          ))}
+                      </datalist>
+
+                      <div className="sm:col-span-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3">
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[2fr_3fr] sm:items-center">
+                          <input
+                            className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                            placeholder="SKU interno *"
+                            list="sku-options"
+                            value={form.skuInternal}
+                            onChange={(e) => {
+                              setManualSkuEdited(true);
+                              setForm((f) => ({ ...f, skuInternal: e.target.value.toUpperCase() }));
+                            }}
+                            required
+                          />
+                          <div className="flex flex-wrap items-center gap-2 text-xs text-emerald-200">
+                            {manualSkuSuggestionLoading ? (
+                              <span>Calculando siguiente SKU...</span>
+                            ) : manualSkuSuggestion ? (
+                              <>
+                                <span>Sugerido: {manualSkuSuggestion}</span>
+                                <button
+                                  type="button"
+                                  className="rounded-md border border-emerald-400/50 bg-emerald-500/10 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-100 hover:bg-emerald-500/20"
+                                  onClick={() => {
+                                    setManualSkuEdited(false);
+                                    applyManualSkuSuggestion(manualSkuSuggestion, true);
+                                  }}
+                                >
+                                  Usar sugerido
+                                </button>
+                              </>
+                            ) : (
+                              <span>
+                                Agrega una regla en la pestaña Nomenclaturas para autollenar el siguiente SKU.
                               </span>
                             )}
-                            {!isCover && (
-                              <button
-                                type="button"
-                                className="text-[11px] text-emerald-300 hover:text-emerald-200"
-                                onClick={() => setManualCoverPhoto(index)}
-                              >
-                                Portada
-                              </button>
+                            {manualSkuSuggestionError && (
+                              <span className="text-amber-300">{manualSkuSuggestionError}</span>
                             )}
-                            <button
-                              type="button"
-                              className="text-[11px] text-slate-300 hover:text-slate-100 disabled:opacity-40"
-                              onClick={() => moveManualPhoto(index, index - 1)}
-                              disabled={index === 0}
-                            >
-                              ←
-                            </button>
-                            <button
-                              type="button"
-                              className="text-[11px] text-slate-300 hover:text-slate-100 disabled:opacity-40"
-                              onClick={() => moveManualPhoto(index, index + 1)}
-                              disabled={index >= photoFiles.length - 1}
-                            >
-                              →
-                            </button>
-                            <button
-                              type="button"
-                              className="text-[11px] text-amber-300 hover:text-amber-200"
-                              onClick={() => openPhotoEditorForFile(file)}
-                            >
-                              Editar
-                            </button>
-                            <button
-                              type="button"
-                              className="text-[11px] text-rose-300 hover:text-rose-200"
-                              onClick={() => removeManualPhoto(index)}
-                            >
-                              Quitar
-                            </button>
                           </div>
                         </div>
-                      );
-                    })}
-                  </div>
+                      </div>
+
+                      <div className="sm:col-span-3 flex items-center gap-3">
+                        <button
+                          type="submit"
+                          disabled={pending}
+                          className="px-4 py-2 rounded-md bg-primary text-white font-semibold hover:bg-teal-700 disabled:opacity-60"
+                        >
+                          {pending ? "Guardando..." : "Guardar"}
+                        </button>
+                        {message && <span className="text-sm text-amber-300">{message}</span>}
+                      </div>
+                    </form>
+                  ) : (
+                    <div className="space-y-3 rounded-xl border border-slate-700 bg-slate-900/60 p-3">
+                      <p className="text-xs text-slate-400">
+                        Crea reglas PIEZA → NOMENCLATURA para que el SKU se autogenere con el siguiente consecutivo.
+                      </p>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-[2fr_1fr_auto]">
+                        <input
+                          className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                          placeholder="Pieza (ej. FARO)"
+                          value={manualNomenclatureDraft.piece}
+                          onChange={(e) =>
+                            setManualNomenclatureDraft((current) => ({
+                              ...current,
+                              piece: e.target.value.toUpperCase()
+                            }))
+                          }
+                        />
+                        <input
+                          className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                          placeholder="Nomenclatura (ej. FAR)"
+                          value={manualNomenclatureDraft.prefix}
+                          onChange={(e) =>
+                            setManualNomenclatureDraft((current) => ({
+                              ...current,
+                              prefix: e.target.value.toUpperCase()
+                            }))
+                          }
+                        />
+                        <button
+                          type="button"
+                          onClick={addManualNomenclature}
+                          className="rounded-md border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-amber-200 hover:bg-amber-500/20"
+                        >
+                          Guardar
+                        </button>
+                      </div>
+
+                      {manualNomenclatures.length > 0 ? (
+                        <div className="space-y-2">
+                          {manualNomenclatures
+                            .slice()
+                            .sort((a, b) => a.piece.localeCompare(b.piece))
+                            .map((entry) => (
+                              <div
+                                key={entry.id}
+                                className="flex flex-col gap-2 rounded-lg border border-slate-700 bg-slate-950/60 p-2 sm:flex-row sm:items-center sm:justify-between"
+                              >
+                                <div className="text-sm text-slate-200">
+                                  <span className="font-semibold text-slate-100">{entry.piece}</span>
+                                  <span className="mx-2 text-slate-500">→</span>
+                                  <span className="font-mono tracking-wide text-emerald-200">{entry.prefix}</span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => removeManualNomenclature(entry.id)}
+                                  className="self-start rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-rose-200 hover:bg-rose-500/20 sm:self-auto"
+                                >
+                                  Eliminar
+                                </button>
+                              </div>
+                            ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-slate-400">Todavia no hay nomenclaturas configuradas.</p>
+                      )}
+
+                      {message && <span className="text-sm text-amber-300">{message}</span>}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-            <datalist id="sku-options">
-              {skuSuggestions.map((sku) => (
-                <option key={sku} value={sku} />
-              ))}
-            </datalist>
-            <datalist id="brand-options">
-              {brandSuggestions.map((brand) => (
-                <option key={brand} value={brand} />
-              ))}
-            </datalist>
-            <datalist id="model-options">
-              {modelOptions.map((model) => (
-                <option key={model} value={model} />
-              ))}
-            </datalist>
-            <datalist id="ubicacion-options">
-              {ubicacionSuggestions.map((u) => (
-                <option key={u} value={u} />
-              ))}
-            </datalist>
-            <datalist id="pieza-options">
-              {Array.from(
-                new Set(
-                  items
-                    .map((item) => item.extraData?.pieza)
-                    .filter((p): p is string => Boolean(p && p.trim()))
-                )
-              )
-                .sort()
-                .map((pieza) => (
-                <option key={pieza} value={pieza} />
-              ))}
-            </datalist>
-            <div className="sm:col-span-3 flex items-center gap-3">
-              <button
-                type="submit"
-                disabled={pending}
-                className="px-4 py-2 rounded-md bg-primary text-white font-semibold hover:bg-teal-700 disabled:opacity-60"
-              >
-                {pending ? "Guardando..." : "Guardar"}
-              </button>
-              {message && <span className="text-sm text-amber-300">{message}</span>}
-            </div>
-                </form>
               ) : (
                 <p className="text-sm text-slate-400">
                   Tu rol solo permite consultar inventario. Pide a un administrador que te dé acceso de capturista si necesitas agregar productos.
