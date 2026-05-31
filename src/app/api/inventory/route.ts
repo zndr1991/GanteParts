@@ -106,6 +106,15 @@ const parseFacetFilter = (searchParams: URLSearchParams, key: "marcaFilter" | "c
   return raw.toUpperCase();
 };
 
+const parsePrestadoDebtorFilters = (searchParams: URLSearchParams) => {
+  const values = searchParams
+    .getAll("prestadoDebtorFilter")
+    .map((entry) => entry.trim().toUpperCase())
+    .filter((entry) => entry.length);
+
+  return Array.from(new Set(values));
+};
+
 const buildStatusFilterSql = (statusFilter: string | null) => {
   if (!statusFilter) return Prisma.empty;
   return Prisma.sql`
@@ -180,6 +189,13 @@ const buildPiezaFilterSql = (piezaFilter: string | null) => {
   `;
 };
 
+const buildPrestadoDebtorFilterSql = (prestadoDebtorFilters: string[]) => {
+  if (!prestadoDebtorFilters.length) return Prisma.empty;
+  return Prisma.sql`
+    AND COALESCE(NULLIF(UPPER(TRIM("extraData"->>'prestado_vendido_a')), ''), '') IN (${Prisma.join(prestadoDebtorFilters)})
+  `;
+};
+
 type InventoryIdRow = {
   id: string;
 };
@@ -235,6 +251,7 @@ const getPrestadoMetrics = async (params: {
   marcaSql: Prisma.Sql;
   cocheSql: Prisma.Sql;
   piezaSql: Prisma.Sql;
+  prestadoDebtorSql: Prisma.Sql;
 }): Promise<PrestadoMetrics> => {
   const rows = await prisma.$queryRaw<PrestadoMetricsRow[]>(Prisma.sql`
     SELECT
@@ -266,6 +283,7 @@ const getPrestadoMetrics = async (params: {
     ${params.marcaSql}
     ${params.cocheSql}
     ${params.piezaSql}
+    ${params.prestadoDebtorSql}
   `);
 
   const total = roundCurrencyValue(parseNumericValue(rows[0]?.total_value));
@@ -346,12 +364,13 @@ export async function GET(req: Request) {
     const marcaFilter = parseFacetFilter(searchParams, "marcaFilter");
     const cocheFilter = parseFacetFilter(searchParams, "cocheFilter");
     const piezaFilter = parseFacetFilter(searchParams, "piezaFilter");
+    const prestadoDebtorFilters = parsePrestadoDebtorFilters(searchParams);
 
-    if (statusFilter || searchFilter || marcaFilter || cocheFilter || piezaFilter) {
+    if (statusFilter || searchFilter || marcaFilter || cocheFilter || piezaFilter || prestadoDebtorFilters.length) {
       const normalizedSearchToken = searchFilter ? normalizeSearchToken(searchFilter) : "";
       const codeSearchMode = Boolean(searchFilter && isLikelyCodeSearch(searchFilter, normalizedSearchToken));
       const fastCodeSearchMode =
-        codeSearchMode && !statusFilter && !marcaFilter && !cocheFilter && !piezaFilter && page === 1;
+        codeSearchMode && !statusFilter && !marcaFilter && !cocheFilter && !piezaFilter && !prestadoDebtorFilters.length && page === 1;
       const shouldLoadPrestadoMetrics = statusFilter === "PRESTADO";
 
       const ownerSql = ownerId ? Prisma.sql`AND "ownerId" = ${ownerId}` : Prisma.empty;
@@ -360,6 +379,7 @@ export async function GET(req: Request) {
       const marcaSql = buildMarcaFilterSql(marcaFilter);
       const cocheSql = buildCocheFilterSql(cocheFilter);
       const piezaSql = buildPiezaFilterSql(piezaFilter);
+      const prestadoDebtorSql = buildPrestadoDebtorFilterSql(prestadoDebtorFilters);
 
       const [idRows, countRows, statusTotals, prestadoMetrics] = await Promise.all([
         prisma.$queryRaw<InventoryIdRow[]>(Prisma.sql`
@@ -372,6 +392,7 @@ export async function GET(req: Request) {
           ${marcaSql}
           ${cocheSql}
           ${piezaSql}
+          ${prestadoDebtorSql}
           ORDER BY "updatedAt" DESC
           OFFSET ${skip}
           LIMIT ${fastCodeSearchMode ? pageSize + 1 : pageSize}
@@ -388,10 +409,11 @@ export async function GET(req: Request) {
               ${marcaSql}
               ${cocheSql}
               ${piezaSql}
+              ${prestadoDebtorSql}
             `),
         getStatusTotals(ownerId),
         shouldLoadPrestadoMetrics
-          ? getPrestadoMetrics({ ownerSql, statusSql, searchSql, marcaSql, cocheSql, piezaSql })
+          ? getPrestadoMetrics({ ownerSql, statusSql, searchSql, marcaSql, cocheSql, piezaSql, prestadoDebtorSql })
           : Promise.resolve<PrestadoMetrics | null>(null)
       ]);
 

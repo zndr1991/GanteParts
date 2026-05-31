@@ -517,6 +517,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [inventoryMarcaFilter, setInventoryMarcaFilter] = useState("");
   const [inventoryCocheFilter, setInventoryCocheFilter] = useState("");
   const [inventoryPiezaFilter, setInventoryPiezaFilter] = useState("");
+  const [prestadoDebtorFilters, setPrestadoDebtorFilters] = useState<string[]>([]);
   const [form, setForm] = useState({
     skuInternal: "",
     mlItemId: "",
@@ -889,6 +890,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     marcaFilter: string;
     cocheFilter: string;
     piezaFilter: string;
+    prestadoDebtorFilters: string[];
     preserveSelection?: boolean;
   }) => {
     const requestId = inventoryPageRequestIdRef.current + 1;
@@ -924,6 +926,12 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       if (options.piezaFilter.trim().length) {
         params.set("piezaFilter", options.piezaFilter.trim());
       }
+      options.prestadoDebtorFilters
+        .map((value) => value.trim())
+        .filter((value) => value.length)
+        .forEach((value) => {
+          params.append("prestadoDebtorFilter", value);
+        });
 
       const res = await fetch(`/api/inventory?${params.toString()}`, {
         cache: "no-store",
@@ -2950,6 +2958,27 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const normalizedInventoryMarcaFilter = inventoryMarcaFilter.trim().toUpperCase();
   const normalizedInventoryCocheFilter = inventoryCocheFilter.trim().toUpperCase();
   const normalizedInventoryPiezaFilter = inventoryPiezaFilter.trim().toUpperCase();
+  const normalizedPrestadoDebtorFilters = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          prestadoDebtorFilters
+            .map((value) => value.trim().toUpperCase())
+            .filter((value) => value.length)
+        )
+      ).sort((a, b) => a.localeCompare(b, "es")),
+    [prestadoDebtorFilters]
+  );
+  const normalizedPrestadoDebtorFilterSet = useMemo(
+    () => new Set(normalizedPrestadoDebtorFilters),
+    [normalizedPrestadoDebtorFilters]
+  );
+
+  useEffect(() => {
+    if (normalizedStatusFilter === "PRESTADO") return;
+    if (!prestadoDebtorFilters.length) return;
+    setPrestadoDebtorFilters([]);
+  }, [normalizedStatusFilter, prestadoDebtorFilters]);
 
   useEffect(() => {
     if (!useServerPagination) return;
@@ -2961,6 +2990,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       marcaFilter: normalizedInventoryMarcaFilter,
       cocheFilter: normalizedInventoryCocheFilter,
       piezaFilter: normalizedInventoryPiezaFilter,
+      prestadoDebtorFilters: normalizedStatusFilter === "PRESTADO" ? normalizedPrestadoDebtorFilters : [],
       preserveSelection: false
     });
   }, [
@@ -2970,6 +3000,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     normalizedInventoryCocheFilter,
     normalizedInventoryMarcaFilter,
     normalizedInventoryPiezaFilter,
+    normalizedPrestadoDebtorFilters,
     normalizedStatusFilter,
     debouncedServerSearchTerm,
     useServerPagination
@@ -2992,15 +3023,24 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     if (pieceFromExtra.length) return pieceFromExtra;
     return normalizeFacetValue(item.title);
   }, []);
+  const getInventoryFacetPrestadoDebtor = useCallback(
+    (item: Item) => normalizeFacetValue(item.extraData?.prestado_vendido_a),
+    []
+  );
 
   const inventoryMarcaOptions = useMemo(() => {
     const options = statusAndSearchFilteredItems
       .filter((item) => {
         const cocheValue = getInventoryFacetCoche(item);
         const piezaValue = getInventoryFacetPieza(item);
+        const prestadoDebtorValue = getInventoryFacetPrestadoDebtor(item);
         const matchesCoche = !normalizedInventoryCocheFilter || cocheValue === normalizedInventoryCocheFilter;
         const matchesPieza = !normalizedInventoryPiezaFilter || piezaValue === normalizedInventoryPiezaFilter;
-        return matchesCoche && matchesPieza;
+        const matchesPrestadoDebtor =
+          normalizedStatusFilter !== "PRESTADO" ||
+          normalizedPrestadoDebtorFilterSet.size === 0 ||
+          normalizedPrestadoDebtorFilterSet.has(prestadoDebtorValue);
+        return matchesCoche && matchesPieza && matchesPrestadoDebtor;
       })
       .map(getInventoryFacetMarca)
       .filter((value) => value.length);
@@ -3010,9 +3050,12 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     statusAndSearchFilteredItems,
     normalizedInventoryCocheFilter,
     normalizedInventoryPiezaFilter,
+    normalizedStatusFilter,
+    normalizedPrestadoDebtorFilterSet,
     getInventoryFacetMarca,
     getInventoryFacetCoche,
-    getInventoryFacetPieza
+    getInventoryFacetPieza,
+    getInventoryFacetPrestadoDebtor
   ]);
 
   const inventoryCocheOptions = useMemo(() => {
@@ -3020,9 +3063,14 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       .filter((item) => {
         const marcaValue = getInventoryFacetMarca(item);
         const piezaValue = getInventoryFacetPieza(item);
+        const prestadoDebtorValue = getInventoryFacetPrestadoDebtor(item);
         const matchesMarca = !normalizedInventoryMarcaFilter || marcaValue === normalizedInventoryMarcaFilter;
         const matchesPieza = !normalizedInventoryPiezaFilter || piezaValue === normalizedInventoryPiezaFilter;
-        return matchesMarca && matchesPieza;
+        const matchesPrestadoDebtor =
+          normalizedStatusFilter !== "PRESTADO" ||
+          normalizedPrestadoDebtorFilterSet.size === 0 ||
+          normalizedPrestadoDebtorFilterSet.has(prestadoDebtorValue);
+        return matchesMarca && matchesPieza && matchesPrestadoDebtor;
       })
       .map(getInventoryFacetCoche)
       .filter((value) => value.length);
@@ -3032,9 +3080,12 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     statusAndSearchFilteredItems,
     normalizedInventoryMarcaFilter,
     normalizedInventoryPiezaFilter,
+    normalizedStatusFilter,
+    normalizedPrestadoDebtorFilterSet,
     getInventoryFacetMarca,
     getInventoryFacetCoche,
-    getInventoryFacetPieza
+    getInventoryFacetPieza,
+    getInventoryFacetPrestadoDebtor
   ]);
 
   const inventoryPiezaOptions = useMemo(() => {
@@ -3042,9 +3093,14 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       .filter((item) => {
         const marcaValue = getInventoryFacetMarca(item);
         const cocheValue = getInventoryFacetCoche(item);
+        const prestadoDebtorValue = getInventoryFacetPrestadoDebtor(item);
         const matchesMarca = !normalizedInventoryMarcaFilter || marcaValue === normalizedInventoryMarcaFilter;
         const matchesCoche = !normalizedInventoryCocheFilter || cocheValue === normalizedInventoryCocheFilter;
-        return matchesMarca && matchesCoche;
+        const matchesPrestadoDebtor =
+          normalizedStatusFilter !== "PRESTADO" ||
+          normalizedPrestadoDebtorFilterSet.size === 0 ||
+          normalizedPrestadoDebtorFilterSet.has(prestadoDebtorValue);
+        return matchesMarca && matchesCoche && matchesPrestadoDebtor;
       })
       .map(getInventoryFacetPieza)
       .filter((value) => value.length);
@@ -3054,9 +3110,41 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     statusAndSearchFilteredItems,
     normalizedInventoryMarcaFilter,
     normalizedInventoryCocheFilter,
+    normalizedStatusFilter,
+    normalizedPrestadoDebtorFilterSet,
     getInventoryFacetMarca,
     getInventoryFacetCoche,
-    getInventoryFacetPieza
+    getInventoryFacetPieza,
+    getInventoryFacetPrestadoDebtor
+  ]);
+
+  const inventoryPrestadoDebtorOptions = useMemo(() => {
+    if (normalizedStatusFilter !== "PRESTADO") return [];
+
+    const options = statusAndSearchFilteredItems
+      .filter((item) => {
+        const marcaValue = getInventoryFacetMarca(item);
+        const cocheValue = getInventoryFacetCoche(item);
+        const piezaValue = getInventoryFacetPieza(item);
+        const matchesMarca = !normalizedInventoryMarcaFilter || marcaValue === normalizedInventoryMarcaFilter;
+        const matchesCoche = !normalizedInventoryCocheFilter || cocheValue === normalizedInventoryCocheFilter;
+        const matchesPieza = !normalizedInventoryPiezaFilter || piezaValue === normalizedInventoryPiezaFilter;
+        return matchesMarca && matchesCoche && matchesPieza;
+      })
+      .map(getInventoryFacetPrestadoDebtor)
+      .filter((value) => value.length);
+
+    return Array.from(new Set(options)).sort((a, b) => a.localeCompare(b, "es"));
+  }, [
+    statusAndSearchFilteredItems,
+    normalizedStatusFilter,
+    normalizedInventoryMarcaFilter,
+    normalizedInventoryCocheFilter,
+    normalizedInventoryPiezaFilter,
+    getInventoryFacetMarca,
+    getInventoryFacetCoche,
+    getInventoryFacetPieza,
+    getInventoryFacetPrestadoDebtor
   ]);
 
   useEffect(() => {
@@ -3093,6 +3181,13 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       if (normalizedInventoryMarcaFilter && marcaValue !== normalizedInventoryMarcaFilter) return false;
       if (normalizedInventoryCocheFilter && cocheValue !== normalizedInventoryCocheFilter) return false;
       if (normalizedInventoryPiezaFilter && piezaValue !== normalizedInventoryPiezaFilter) return false;
+      if (
+        normalizedStatusFilter === "PRESTADO" &&
+        normalizedPrestadoDebtorFilterSet.size > 0 &&
+        !normalizedPrestadoDebtorFilterSet.has(getInventoryFacetPrestadoDebtor(item))
+      ) {
+        return false;
+      }
 
       return true;
     });
@@ -3101,9 +3196,12 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     normalizedInventoryMarcaFilter,
     normalizedInventoryCocheFilter,
     normalizedInventoryPiezaFilter,
+    normalizedStatusFilter,
+    normalizedPrestadoDebtorFilterSet,
     getInventoryFacetMarca,
     getInventoryFacetCoche,
     getInventoryFacetPieza,
+    getInventoryFacetPrestadoDebtor,
     useServerPagination
   ]);
 
@@ -3181,7 +3279,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     normalizedStatusFilter,
     normalizedInventoryMarcaFilter,
     normalizedInventoryCocheFilter,
-    normalizedInventoryPiezaFilter
+    normalizedInventoryPiezaFilter,
+    normalizedPrestadoDebtorFilters
   ]);
 
   useEffect(() => {
@@ -3246,6 +3345,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     normalizedInventoryMarcaFilter,
     normalizedInventoryCocheFilter,
     normalizedInventoryPiezaFilter,
+    normalizedPrestadoDebtorFilters,
     sortConfig,
     inventoryPage
   ]);
@@ -4003,7 +4103,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                   Mostrando {paginatedVisibleStart}-{paginatedVisibleEnd} de {useServerPagination ? totalItems : filteredItems.length}
                 </span>
               </div>
-              <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-4">
+              <div className={`grid w-full grid-cols-1 gap-2 ${normalizedStatusFilter === "PRESTADO" ? "sm:grid-cols-5" : "sm:grid-cols-4"}`}>
                 <select
                   value={inventoryMarcaFilter}
                   onChange={(event) => setInventoryMarcaFilter(event.target.value)}
@@ -4040,14 +4140,35 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                     </option>
                   ))}
                 </select>
+                {normalizedStatusFilter === "PRESTADO" && (
+                  <div className="rounded-md border border-slate-700 bg-slate-900 px-3 py-2">
+                    <p className="mb-1 text-[10px] uppercase tracking-wide text-slate-400">Me debe (uno o varios)</p>
+                    <select
+                      multiple
+                      value={prestadoDebtorFilters}
+                      onChange={(event) => {
+                        const selected = Array.from(event.currentTarget.selectedOptions).map((option) => option.value);
+                        setPrestadoDebtorFilters(selected);
+                      }}
+                      className="h-20 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
+                    >
+                      {inventoryPrestadoDebtorOptions.map((debtor) => (
+                        <option key={debtor} value={debtor}>
+                          {debtor}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <button
                   type="button"
                   onClick={() => {
                     setInventoryMarcaFilter("");
                     setInventoryCocheFilter("");
                     setInventoryPiezaFilter("");
+                    setPrestadoDebtorFilters([]);
                   }}
-                  disabled={!inventoryMarcaFilter && !inventoryCocheFilter && !inventoryPiezaFilter}
+                  disabled={!inventoryMarcaFilter && !inventoryCocheFilter && !inventoryPiezaFilter && prestadoDebtorFilters.length === 0}
                   className="rounded-md border border-slate-600 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-amber-400 disabled:opacity-50"
                 >
                   Limpiar filtros
