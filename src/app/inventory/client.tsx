@@ -3147,6 +3147,26 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     getInventoryFacetPrestadoDebtor
   ]);
 
+  const visiblePrestadoDebtorOptions = useMemo(() => {
+    if (normalizedStatusFilter !== "PRESTADO") return [];
+    return Array.from(new Set([...inventoryPrestadoDebtorOptions, ...normalizedPrestadoDebtorFilters])).sort((a, b) =>
+      a.localeCompare(b, "es")
+    );
+  }, [inventoryPrestadoDebtorOptions, normalizedPrestadoDebtorFilters, normalizedStatusFilter]);
+
+  const togglePrestadoDebtorFilter = useCallback((debtor: string) => {
+    const normalized = debtor.trim().toUpperCase();
+    if (!normalized.length) return;
+
+    setPrestadoDebtorFilters((current) => {
+      const exists = current.some((entry) => entry.trim().toUpperCase() === normalized);
+      if (exists) {
+        return current.filter((entry) => entry.trim().toUpperCase() !== normalized);
+      }
+      return [...current, normalized];
+    });
+  }, []);
+
   useEffect(() => {
     if (useServerPagination) return;
     if (!inventoryMarcaFilter) return;
@@ -4141,23 +4161,40 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                   ))}
                 </select>
                 {normalizedStatusFilter === "PRESTADO" && (
-                  <div className="rounded-md border border-slate-700 bg-slate-900 px-3 py-2">
-                    <p className="mb-1 text-[10px] uppercase tracking-wide text-slate-400">Me debe (uno o varios)</p>
-                    <select
-                      multiple
-                      value={prestadoDebtorFilters}
-                      onChange={(event) => {
-                        const selected = Array.from(event.currentTarget.selectedOptions).map((option) => option.value);
-                        setPrestadoDebtorFilters(selected);
-                      }}
-                      className="h-20 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
-                    >
-                      {inventoryPrestadoDebtorOptions.map((debtor) => (
-                        <option key={debtor} value={debtor}>
-                          {debtor}
-                        </option>
-                      ))}
-                    </select>
+                  <div className="rounded-md border border-slate-700 bg-gradient-to-b from-slate-900 to-slate-950 px-3 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[10px] uppercase tracking-wide text-slate-400">Me debe (uno o varios)</p>
+                      <span className="text-[10px] text-slate-500">
+                        {normalizedPrestadoDebtorFilters.length
+                          ? `${normalizedPrestadoDebtorFilters.length} seleccionados`
+                          : "Sin selección"}
+                      </span>
+                    </div>
+                    {visiblePrestadoDebtorOptions.length > 0 ? (
+                      <div className="mt-2 flex max-h-24 flex-wrap gap-1.5 overflow-y-auto pr-1">
+                        {visiblePrestadoDebtorOptions.map((debtor) => {
+                          const isActive = normalizedPrestadoDebtorFilterSet.has(debtor);
+                          return (
+                            <button
+                              key={debtor}
+                              type="button"
+                              onClick={() => togglePrestadoDebtorFilter(debtor)}
+                              className={`rounded-full border px-2 py-1 text-[11px] font-semibold transition ${
+                                isActive
+                                  ? "border-cyan-400/80 bg-cyan-500/20 text-cyan-100"
+                                  : "border-slate-600 bg-slate-900/70 text-slate-200 hover:border-cyan-400/60"
+                              }`}
+                            >
+                              {debtor}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="mt-2 text-[11px] text-slate-500">
+                        No hay personas disponibles con los filtros actuales.
+                      </p>
+                    )}
                   </div>
                 )}
                 <button
