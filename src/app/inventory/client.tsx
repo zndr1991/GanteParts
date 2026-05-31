@@ -5205,13 +5205,24 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
               </div>
             </div>
           )}
-          <p className="text-xs text-slate-400">
-            {loadingPage
-              ? "Cargando registros..."
-              : `Mostrando ${paginatedVisibleStart}-${paginatedVisibleEnd} de ${
-                  useServerPagination ? totalItems : filteredItems.length
-                } filtrados (${items.length} cargados${useServerPagination ? " en esta pagina" : ""})`}
-          </p>
+          {loadingPage ? (
+            <div className="flex items-center gap-2 text-xs text-slate-400">
+              <img
+                src="/assets/inventory-loading.gif"
+                alt="Cargando registros"
+                className="h-5 w-5 rounded-sm object-cover"
+                loading="eager"
+                decoding="async"
+              />
+              <span>Cargando registros...</span>
+            </div>
+          ) : (
+            <p className="text-xs text-slate-400">
+              {`Mostrando ${paginatedVisibleStart}-${paginatedVisibleEnd} de ${
+                useServerPagination ? totalItems : filteredItems.length
+              } filtrados (${items.length} cargados${useServerPagination ? " en esta pagina" : ""})`}
+            </p>
+          )}
           {isMobile && (
           <div className="mt-4 space-y-3">
             {filteredItems.length === 0 ? (
