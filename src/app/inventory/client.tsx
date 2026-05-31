@@ -88,6 +88,19 @@ type InventoryPageResponse = {
   } | null;
 };
 
+type InventoryPageCachePayload = {
+  items: Item[];
+  total: number;
+  statusTotals: Record<string, number>;
+  prestadoMetrics: {
+    total: number;
+    debt: number;
+    profit: number;
+  } | null;
+  hasFacetOptions: boolean;
+  facetOptions: InventoryFacetOptions | null;
+};
+
 type FinanceEntryType = "income" | "expense";
 
 type SoldFinanceRegistrationResult =
@@ -184,6 +197,8 @@ const INVENTORY_TABLE_COLUMN_COUNT = 27;
 const WORKER_SEARCH_MIN_ITEMS = 250;
 const INVENTORY_PAGE_BLOCK_SIZE = 40;
 const SERVER_SEARCH_DEBOUNCE_MS = 320;
+const INVENTORY_PAGE_CACHE_TTL_MS = 25_000;
+const INVENTORY_LOADING_INDICATOR_DELAY_MS = 180;
 
 const makePhotoKey = (file: File) => `${file.name}-${file.size}-${file.lastModified}`;
 
@@ -462,6 +477,36 @@ const normalizeFacetOptions = (value: unknown): InventoryFacetOptions => {
   };
 };
 
+const buildInventoryPageCacheKey = (options: {
+  page: number;
+  search: string;
+  statusFilter: string | null;
+  marcaFilter: string;
+  cocheFilter: string;
+  piezaFilter: string;
+  prestadoDebtorFilters: string[];
+  includeFacetOptions: boolean;
+}) => {
+  const normalizedDebtors = Array.from(
+    new Set(
+      options.prestadoDebtorFilters
+        .map((value) => value.trim().toUpperCase())
+        .filter((value) => value.length)
+    )
+  ).sort((a, b) => a.localeCompare(b, "es"));
+
+  return JSON.stringify({
+    page: Math.max(1, options.page),
+    search: options.search.trim(),
+    statusFilter: options.statusFilter?.trim().toUpperCase() || null,
+    marcaFilter: options.marcaFilter.trim().toUpperCase(),
+    cocheFilter: options.cocheFilter.trim().toUpperCase(),
+    piezaFilter: options.piezaFilter.trim().toUpperCase(),
+    prestadoDebtorFilters: normalizedDebtors,
+    includeFacetOptions: options.includeFacetOptions
+  });
+};
+
 const normalizePrestadoMetrics = (value: unknown) => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
 
@@ -630,6 +675,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const workerSearchRequestIdRef = useRef(0);
   const inventoryPageRequestIdRef = useRef(0);
   const inventoryRequestAbortRef = useRef<AbortController | null>(null);
+  const loadingPageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inventoryPageCacheRef = useRef<Map<string, { expiresAt: number; payload: InventoryPageCachePayload }>>(
+    new Map()
+  );
   const isMountedRef = useRef(true);
   const desktopTableContainerRef = useRef<HTMLDivElement | null>(null);
   const localEstatusInternoRef = useRef(
@@ -850,6 +899,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       if (toastTimeoutRef.current) {
         clearTimeout(toastTimeoutRef.current);
       }
+      if (loadingPageTimeoutRef.current) {
+        clearTimeout(loadingPageTimeoutRef.current);
+        loadingPageTimeoutRef.current = null;
+      }
       if (inventoryRequestAbortRef.current) {
         inventoryRequestAbortRef.current.abort();
         inventoryRequestAbortRef.current = null;
@@ -937,13 +990,63 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   }) => {
     const requestId = inventoryPageRequestIdRef.current + 1;
     inventoryPageRequestIdRef.current = requestId;
-    const requestController = new AbortController();
+
     if (inventoryRequestAbortRef.current) {
       inventoryRequestAbortRef.current.abort();
+      inventoryRequestAbortRef.current = null;
     }
-    inventoryRequestAbortRef.current = requestController;
+    if (loadingPageTimeoutRef.current) {
+      clearTimeout(loadingPageTimeoutRef.current);
+      loadingPageTimeoutRef.current = null;
+    }
+
     setMessage(null);
-    setLoadingPage(true);
+    setLoadingPage(false);
+
+    const includeFacetOptions = Boolean(options.includeFacetOptions);
+    const cacheKey = buildInventoryPageCacheKey({
+      page: options.page,
+      search: options.search,
+      statusFilter: options.statusFilter,
+      marcaFilter: options.marcaFilter,
+      cocheFilter: options.cocheFilter,
+      piezaFilter: options.piezaFilter,
+      prestadoDebtorFilters: options.prestadoDebtorFilters,
+      includeFacetOptions
+    });
+
+    const cached = inventoryPageCacheRef.current.get(cacheKey);
+    const now = Date.now();
+    if (cached && cached.expiresAt > now) {
+      const incomingWithLocal = mergeIncomingWithLocalOverrides(cached.payload.items);
+      setItems(incomingWithLocal);
+      setTotalItems(cached.payload.total);
+      setStatusTotals(cached.payload.statusTotals);
+      setPrestadoMetrics(cached.payload.prestadoMetrics);
+      if (cached.payload.hasFacetOptions && cached.payload.facetOptions) {
+        setServerFacetOptions(cached.payload.facetOptions);
+      }
+
+      if (!options.preserveSelection) {
+        setSelectedIds([]);
+        setFocusedRowInfo(null);
+      }
+
+      setLoadingPage(false);
+      return true;
+    }
+    if (cached) {
+      inventoryPageCacheRef.current.delete(cacheKey);
+    }
+
+    loadingPageTimeoutRef.current = setTimeout(() => {
+      if (!isMountedRef.current) return;
+      if (inventoryPageRequestIdRef.current !== requestId) return;
+      setLoadingPage(true);
+    }, INVENTORY_LOADING_INDICATOR_DELAY_MS);
+
+    const requestController = new AbortController();
+    inventoryRequestAbortRef.current = requestController;
 
     try {
       const params = new URLSearchParams({
@@ -968,7 +1071,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       if (options.piezaFilter.trim().length) {
         params.set("piezaFilter", options.piezaFilter.trim());
       }
-      if (options.includeFacetOptions) {
+      if (includeFacetOptions) {
         params.set("includeFacetOptions", "1");
       }
       options.prestadoDebtorFilters
@@ -992,19 +1095,47 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       }
 
       const incoming: Item[] = Array.isArray(data.items) ? data.items : [];
-      const incomingWithLocal = mergeIncomingWithLocalOverrides(incoming);
-      const nextTotal = typeof data.total === "number" && data.total >= 0 ? data.total : incomingWithLocal.length;
+      const nextTotal = typeof data.total === "number" && data.total >= 0 ? data.total : incoming.length;
       const nextStatusTotals = normalizeStatusTotals(data.statusTotals);
       const nextPrestadoMetrics = normalizePrestadoMetrics(data.prestadoMetrics);
       const shouldUpdateFacetOptions = Object.prototype.hasOwnProperty.call(data, "facetOptions");
       const nextFacetOptions = shouldUpdateFacetOptions ? normalizeFacetOptions(data.facetOptions) : null;
 
+      const payload: InventoryPageCachePayload = {
+        items: incoming,
+        total: nextTotal,
+        statusTotals: nextStatusTotals,
+        prestadoMetrics: nextPrestadoMetrics,
+        hasFacetOptions: shouldUpdateFacetOptions,
+        facetOptions: nextFacetOptions
+      };
+
+      inventoryPageCacheRef.current.set(cacheKey, {
+        expiresAt: Date.now() + INVENTORY_PAGE_CACHE_TTL_MS,
+        payload
+      });
+      if (inventoryPageCacheRef.current.size > 180) {
+        const pruneNow = Date.now();
+        for (const [key, entry] of inventoryPageCacheRef.current.entries()) {
+          if (entry.expiresAt <= pruneNow) {
+            inventoryPageCacheRef.current.delete(key);
+          }
+        }
+        while (inventoryPageCacheRef.current.size > 180) {
+          const firstKey = inventoryPageCacheRef.current.keys().next().value;
+          if (!firstKey) break;
+          inventoryPageCacheRef.current.delete(firstKey);
+        }
+      }
+
+      const incomingWithLocal = mergeIncomingWithLocalOverrides(payload.items);
+
       setItems(incomingWithLocal);
-      setTotalItems(nextTotal);
-      setStatusTotals(nextStatusTotals);
-      setPrestadoMetrics(nextPrestadoMetrics);
-      if (nextFacetOptions) {
-        setServerFacetOptions(nextFacetOptions);
+      setTotalItems(payload.total);
+      setStatusTotals(payload.statusTotals);
+      setPrestadoMetrics(payload.prestadoMetrics);
+      if (payload.hasFacetOptions && payload.facetOptions) {
+        setServerFacetOptions(payload.facetOptions);
       }
 
       if (!options.preserveSelection) {
@@ -1026,6 +1157,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         inventoryRequestAbortRef.current = null;
       }
       if (inventoryPageRequestIdRef.current === requestId) {
+        if (loadingPageTimeoutRef.current) {
+          clearTimeout(loadingPageTimeoutRef.current);
+          loadingPageTimeoutRef.current = null;
+        }
         setLoadingPage(false);
       }
     }
@@ -1034,6 +1169,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const refresh = useCallback(async () => {
     if (isManualOnly) return;
     if (useServerPagination) {
+      inventoryPageCacheRef.current.clear();
       setInventoryReloadSeq((current) => current + 1);
     }
   }, [isManualOnly, useServerPagination]);
