@@ -73,6 +73,11 @@ type InventoryPageResponse = {
   total: number;
   totalPages?: number;
   statusTotals?: Record<string, number>;
+  prestadoMetrics?: {
+    total: number;
+    debt: number;
+    profit: number;
+  } | null;
 };
 
 type FinanceEntryType = "income" | "expense";
@@ -402,6 +407,42 @@ const formatCurrencyMx = (value?: number | null) => {
   }
 };
 
+const parseCurrencyLikeNumber = (value: unknown) => {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  const raw = value.toString().trim();
+  if (!raw.length) return null;
+  const normalized = raw.replace(/,/g, "").replace(/[^0-9.-]/g, "");
+  if (!normalized.length) return null;
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed)) return null;
+  return parsed;
+};
+
+const roundCurrencyValue = (value: number) => Math.round(value * 100) / 100;
+
+const normalizePrestadoMetrics = (value: unknown) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+
+  const source = value as Record<string, unknown>;
+  const total = Number(source.total ?? NaN);
+  const debt = Number(source.debt ?? NaN);
+  const profit = Number(source.profit ?? NaN);
+
+  if (!Number.isFinite(total) || !Number.isFinite(debt) || !Number.isFinite(profit)) {
+    return null;
+  }
+
+  return {
+    total: roundCurrencyValue(total),
+    debt: roundCurrencyValue(debt),
+    profit: roundCurrencyValue(profit)
+  };
+};
+
 const todayDateOnly = () => new Date().toISOString().slice(0, 10);
 
 const toDateOnly = (value?: string | null) => {
@@ -560,6 +601,11 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [statusTotals, setStatusTotals] = useState<Record<string, number>>(
     normalizeStatusTotals(initialPage.statusTotals)
   );
+  const [prestadoMetrics, setPrestadoMetrics] = useState<{
+    total: number;
+    debt: number;
+    profit: number;
+  } | null>(normalizePrestadoMetrics(initialPage.prestadoMetrics));
   const [workerSearchResult, setWorkerSearchResult] = useState<{ query: string; ids: string[] } | null>(null);
   const [workerSearching, setWorkerSearching] = useState(false);
   const [loadingPage, setLoadingPage] = useState(false);
@@ -896,10 +942,12 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       const incomingWithLocal = mergeIncomingWithLocalOverrides(incoming);
       const nextTotal = typeof data.total === "number" && data.total >= 0 ? data.total : incomingWithLocal.length;
       const nextStatusTotals = normalizeStatusTotals(data.statusTotals);
+      const nextPrestadoMetrics = normalizePrestadoMetrics(data.prestadoMetrics);
 
       setItems(incomingWithLocal);
       setTotalItems(nextTotal);
       setStatusTotals(nextStatusTotals);
+      setPrestadoMetrics(nextPrestadoMetrics);
 
       if (!options.preserveSelection) {
         setSelectedIds([]);
@@ -3160,6 +3208,34 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     });
   }, [items, statusTotals, totalItems]);
 
+  const prestadoSummary = useMemo(() => {
+    if (normalizedStatusFilter !== "PRESTADO") return null;
+    if (prestadoMetrics) return prestadoMetrics;
+
+    let total = 0;
+    let totalCost = 0;
+
+    filteredItems.forEach((item) => {
+      const units = item.stock > 0 ? item.stock : 1;
+      const price = Number(item.price ?? 0);
+      if (Number.isFinite(price)) {
+        total += price * units;
+      }
+
+      const cost = parseCurrencyLikeNumber(item.extraData?.precio_compra);
+      if (cost !== null) {
+        totalCost += cost * units;
+      }
+    });
+
+    const roundedTotal = roundCurrencyValue(total);
+    return {
+      total: roundedTotal,
+      debt: roundedTotal,
+      profit: roundCurrencyValue(roundedTotal - roundCurrencyValue(totalCost))
+    };
+  }, [filteredItems, normalizedStatusFilter, prestadoMetrics]);
+
   return (
     <>
       {!isManualOnly && toastNotification && (
@@ -4025,6 +4101,24 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                   </button>
                 );
               })}
+            </div>
+          )}
+          {prestadoSummary && (
+            <div className="grid grid-cols-1 gap-2 rounded-2xl border border-sky-500/30 bg-sky-950/20 p-3 sm:grid-cols-3">
+              <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-3">
+                <p className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Total prestado</p>
+                <p className="mt-1 text-lg font-semibold text-emerald-300">{formatCurrencyMx(prestadoSummary.total)}</p>
+              </div>
+              <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-3">
+                <p className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Me deben</p>
+                <p className="mt-1 text-lg font-semibold text-amber-300">{formatCurrencyMx(prestadoSummary.debt)}</p>
+              </div>
+              <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-3">
+                <p className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Utilidad estimada</p>
+                <p className={`mt-1 text-lg font-semibold ${prestadoSummary.profit >= 0 ? "text-cyan-300" : "text-rose-300"}`}>
+                  {formatCurrencyMx(prestadoSummary.profit)}
+                </p>
+              </div>
             </div>
           )}
           {filteredItems.length > 0 && (

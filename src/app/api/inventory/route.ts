@@ -193,6 +193,17 @@ type StatusCountRow = {
   count: number | bigint | string;
 };
 
+type PrestadoMetricsRow = {
+  total_value: number | bigint | string | null;
+  total_cost: number | bigint | string | null;
+};
+
+type PrestadoMetrics = {
+  total: number;
+  debt: number;
+  profit: number;
+};
+
 type StatusTotalsCacheEntry = {
   value: Record<string, number>;
   expiresAt: number;
@@ -206,6 +217,66 @@ const statusTotalsCacheKey = (ownerId: string | null) => ownerId ?? "__ALL__";
 const invalidateStatusTotalsCache = () => {
   statusTotalsCache.clear();
   statusTotalsInFlight.clear();
+};
+
+const roundCurrencyValue = (value: number) => Math.round(value * 100) / 100;
+
+const parseNumericValue = (value: number | bigint | string | null | undefined) => {
+  if (value === null || value === undefined) return 0;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return parsed;
+};
+
+const getPrestadoMetrics = async (params: {
+  ownerSql: Prisma.Sql;
+  statusSql: Prisma.Sql;
+  searchSql: Prisma.Sql;
+  marcaSql: Prisma.Sql;
+  cocheSql: Prisma.Sql;
+  piezaSql: Prisma.Sql;
+}): Promise<PrestadoMetrics> => {
+  const rows = await prisma.$queryRaw<PrestadoMetricsRow[]>(Prisma.sql`
+    SELECT
+      COALESCE(
+        SUM(
+          COALESCE("price", 0) *
+          CASE WHEN COALESCE("stock", 0) > 0 THEN COALESCE("stock", 0) ELSE 1 END
+        ),
+        0
+      ) AS total_value,
+      COALESCE(
+        SUM(
+          (
+            CASE
+              WHEN jsonb_typeof("extraData"->'precio_compra') = 'number' THEN ("extraData"->>'precio_compra')::numeric
+              WHEN regexp_replace(COALESCE("extraData"->>'precio_compra', ''), '[^0-9\\.-]+', '', 'g') ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                THEN regexp_replace(COALESCE("extraData"->>'precio_compra', ''), '[^0-9\\.-]+', '', 'g')::numeric
+              ELSE 0
+            END
+          ) * CASE WHEN COALESCE("stock", 0) > 0 THEN COALESCE("stock", 0) ELSE 1 END
+        ),
+        0
+      ) AS total_cost
+    FROM "InventoryItem"
+    WHERE 1=1
+    ${params.ownerSql}
+    ${params.statusSql}
+    ${params.searchSql}
+    ${params.marcaSql}
+    ${params.cocheSql}
+    ${params.piezaSql}
+  `);
+
+  const total = roundCurrencyValue(parseNumericValue(rows[0]?.total_value));
+  const cost = roundCurrencyValue(parseNumericValue(rows[0]?.total_cost));
+  const profit = roundCurrencyValue(total - cost);
+
+  return {
+    total,
+    debt: total,
+    profit
+  };
 };
 
 const queryStatusTotals = async (ownerId: string | null) => {
@@ -281,6 +352,7 @@ export async function GET(req: Request) {
       const codeSearchMode = Boolean(searchFilter && isLikelyCodeSearch(searchFilter, normalizedSearchToken));
       const fastCodeSearchMode =
         codeSearchMode && !statusFilter && !marcaFilter && !cocheFilter && !piezaFilter && page === 1;
+      const shouldLoadPrestadoMetrics = statusFilter === "PRESTADO";
 
       const ownerSql = ownerId ? Prisma.sql`AND "ownerId" = ${ownerId}` : Prisma.empty;
       const statusSql = buildStatusFilterSql(statusFilter);
@@ -289,7 +361,7 @@ export async function GET(req: Request) {
       const cocheSql = buildCocheFilterSql(cocheFilter);
       const piezaSql = buildPiezaFilterSql(piezaFilter);
 
-      const [idRows, countRows, statusTotals] = await Promise.all([
+      const [idRows, countRows, statusTotals, prestadoMetrics] = await Promise.all([
         prisma.$queryRaw<InventoryIdRow[]>(Prisma.sql`
           SELECT "id"
           FROM "InventoryItem"
@@ -317,7 +389,10 @@ export async function GET(req: Request) {
               ${cocheSql}
               ${piezaSql}
             `),
-        getStatusTotals(ownerId)
+        getStatusTotals(ownerId),
+        shouldLoadPrestadoMetrics
+          ? getPrestadoMetrics({ ownerSql, statusSql, searchSql, marcaSql, cocheSql, piezaSql })
+          : Promise.resolve<PrestadoMetrics | null>(null)
       ]);
 
       const hasMoreFastRows = fastCodeSearchMode && idRows.length > pageSize;
@@ -343,6 +418,7 @@ export async function GET(req: Request) {
         total,
         totalPages,
         statusTotals,
+        prestadoMetrics,
         items: serialized
       });
     }
