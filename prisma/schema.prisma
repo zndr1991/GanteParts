@@ -86,6 +86,9 @@ model InventoryItem {
   @@unique([ownerId, skuInternal])
   @@index([updatedAt, id])
   @@index([ownerId, updatedAt])
+  @@index([skuInternal])
+  @@index([mlItemId])
+  @@index([sellerCustomField])
 }
 
 model AuditLog {

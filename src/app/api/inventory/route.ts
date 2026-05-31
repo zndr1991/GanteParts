@@ -92,6 +92,13 @@ const parseSearchFilter = (searchParams: URLSearchParams) => {
 
 const normalizeSearchToken = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
 
+const isLikelyCodeSearch = (rawValue: string, normalizedToken: string) => {
+  if (normalizedToken.length < 3) return false;
+  if (rawValue.length > 48) return false;
+  if (/\s/.test(rawValue)) return false;
+  return /[0-9]/.test(rawValue);
+};
+
 const parseFacetFilter = (searchParams: URLSearchParams, key: "marcaFilter" | "cocheFilter" | "piezaFilter") => {
   const raw = (searchParams.get(key) ?? "").trim();
   if (!raw.length) return null;
@@ -107,9 +114,21 @@ const buildStatusFilterSql = (statusFilter: string | null) => {
 
 const buildSearchFilterSql = (searchFilter: string | null) => {
   if (!searchFilter) return Prisma.empty;
-  const likeValue = `%${searchFilter}%`;
   const normalizedToken = normalizeSearchToken(searchFilter);
-  const normalizedLikeValue = `%${normalizedToken}%`;
+  const likeValue = `%${searchFilter}%`;
+
+  if (isLikelyCodeSearch(searchFilter, normalizedToken)) {
+    const normalizedPrefixValue = `${normalizedToken}%`;
+    return Prisma.sql`
+      AND (
+        regexp_replace(lower(coalesce("skuInternal", '')), '[^a-z0-9]+', '', 'g') LIKE ${normalizedPrefixValue}
+        OR regexp_replace(lower(coalesce("mlItemId", '')), '[^a-z0-9]+', '', 'g') LIKE ${normalizedPrefixValue}
+        OR regexp_replace(lower(coalesce("sellerCustomField", '')), '[^a-z0-9]+', '', 'g') LIKE ${normalizedPrefixValue}
+        OR regexp_replace(lower(coalesce("title", '')), '[^a-z0-9]+', '', 'g') LIKE ${normalizedPrefixValue}
+      )
+    `;
+  }
+
   return Prisma.sql`
     AND (
       COALESCE("skuInternal", '') ILIKE ${likeValue}
@@ -133,14 +152,6 @@ const buildSearchFilterSql = (searchFilter: string | null) => {
       OR COALESCE("extraData"->>'fecha_prestamo_pago', '') ILIKE ${likeValue}
       OR CAST(COALESCE("stock", 0) AS TEXT) ILIKE ${likeValue}
       OR CAST(COALESCE("price", 0) AS TEXT) ILIKE ${likeValue}
-      ${normalizedToken.length
-        ? Prisma.sql`
-            OR REPLACE(REPLACE(REPLACE(COALESCE(LOWER("skuInternal"), ''), '-', ''), ' ', ''), '_', '') LIKE ${normalizedLikeValue}
-            OR REPLACE(REPLACE(REPLACE(COALESCE(LOWER("mlItemId"), ''), '-', ''), ' ', ''), '_', '') LIKE ${normalizedLikeValue}
-            OR REPLACE(REPLACE(REPLACE(COALESCE(LOWER("sellerCustomField"), ''), '-', ''), ' ', ''), '_', '') LIKE ${normalizedLikeValue}
-            OR REPLACE(REPLACE(REPLACE(COALESCE(LOWER("title"), ''), '-', ''), ' ', ''), '_', '') LIKE ${normalizedLikeValue}
-          `
-        : Prisma.empty}
     )
   `;
 };
