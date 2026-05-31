@@ -66,6 +66,13 @@ type InventoryEditFormState = {
 
 type SectionKey = "notifications" | "manual" | "import";
 
+type InventoryFacetOptions = {
+  marca: string[];
+  coche: string[];
+  pieza: string[];
+  prestadoDebtor: string[];
+};
+
 type InventoryPageResponse = {
   items: Item[];
   page: number;
@@ -73,6 +80,7 @@ type InventoryPageResponse = {
   total: number;
   totalPages?: number;
   statusTotals?: Record<string, number>;
+  facetOptions?: InventoryFacetOptions | null;
   prestadoMetrics?: {
     total: number;
     debt: number;
@@ -424,6 +432,36 @@ const parseCurrencyLikeNumber = (value: unknown) => {
 
 const roundCurrencyValue = (value: number) => Math.round(value * 100) / 100;
 
+const normalizeFacetOptionList = (value: unknown) => {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(
+      value
+        .map((entry) => (entry ?? "").toString().trim().toUpperCase())
+        .filter((entry) => entry.length)
+    )
+  ).sort((a, b) => a.localeCompare(b, "es"));
+};
+
+const normalizeFacetOptions = (value: unknown): InventoryFacetOptions => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {
+      marca: [],
+      coche: [],
+      pieza: [],
+      prestadoDebtor: []
+    };
+  }
+
+  const source = value as Record<string, unknown>;
+  return {
+    marca: normalizeFacetOptionList(source.marca),
+    coche: normalizeFacetOptionList(source.coche),
+    pieza: normalizeFacetOptionList(source.pieza),
+    prestadoDebtor: normalizeFacetOptionList(source.prestadoDebtor)
+  };
+};
+
 const normalizePrestadoMetrics = (value: unknown) => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
 
@@ -607,6 +645,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     debt: number;
     profit: number;
   } | null>(normalizePrestadoMetrics(initialPage.prestadoMetrics));
+  const [serverFacetOptions, setServerFacetOptions] = useState<InventoryFacetOptions>(
+    normalizeFacetOptions(initialPage.facetOptions)
+  );
   const [workerSearchResult, setWorkerSearchResult] = useState<{ query: string; ids: string[] } | null>(null);
   const [workerSearching, setWorkerSearching] = useState(false);
   const [loadingPage, setLoadingPage] = useState(false);
@@ -951,11 +992,13 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       const nextTotal = typeof data.total === "number" && data.total >= 0 ? data.total : incomingWithLocal.length;
       const nextStatusTotals = normalizeStatusTotals(data.statusTotals);
       const nextPrestadoMetrics = normalizePrestadoMetrics(data.prestadoMetrics);
+      const nextFacetOptions = normalizeFacetOptions(data.facetOptions);
 
       setItems(incomingWithLocal);
       setTotalItems(nextTotal);
       setStatusTotals(nextStatusTotals);
       setPrestadoMetrics(nextPrestadoMetrics);
+      setServerFacetOptions(nextFacetOptions);
 
       if (!options.preserveSelection) {
         setSelectedIds([]);
@@ -3029,6 +3072,12 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   );
 
   const inventoryMarcaOptions = useMemo(() => {
+    if (useServerPagination) {
+      const base = serverFacetOptions.marca;
+      if (!normalizedInventoryMarcaFilter) return base;
+      return Array.from(new Set([normalizedInventoryMarcaFilter, ...base])).sort((a, b) => a.localeCompare(b, "es"));
+    }
+
     const options = statusAndSearchFilteredItems
       .filter((item) => {
         const cocheValue = getInventoryFacetCoche(item);
@@ -3047,6 +3096,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
     return Array.from(new Set(options)).sort((a, b) => a.localeCompare(b, "es"));
   }, [
+    useServerPagination,
+    serverFacetOptions.marca,
+    normalizedInventoryMarcaFilter,
     statusAndSearchFilteredItems,
     normalizedInventoryCocheFilter,
     normalizedInventoryPiezaFilter,
@@ -3059,6 +3111,12 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   ]);
 
   const inventoryCocheOptions = useMemo(() => {
+    if (useServerPagination) {
+      const base = serverFacetOptions.coche;
+      if (!normalizedInventoryCocheFilter) return base;
+      return Array.from(new Set([normalizedInventoryCocheFilter, ...base])).sort((a, b) => a.localeCompare(b, "es"));
+    }
+
     const options = statusAndSearchFilteredItems
       .filter((item) => {
         const marcaValue = getInventoryFacetMarca(item);
@@ -3077,6 +3135,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
     return Array.from(new Set(options)).sort((a, b) => a.localeCompare(b, "es"));
   }, [
+    useServerPagination,
+    serverFacetOptions.coche,
+    normalizedInventoryCocheFilter,
     statusAndSearchFilteredItems,
     normalizedInventoryMarcaFilter,
     normalizedInventoryPiezaFilter,
@@ -3089,6 +3150,12 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   ]);
 
   const inventoryPiezaOptions = useMemo(() => {
+    if (useServerPagination) {
+      const base = serverFacetOptions.pieza;
+      if (!normalizedInventoryPiezaFilter) return base;
+      return Array.from(new Set([normalizedInventoryPiezaFilter, ...base])).sort((a, b) => a.localeCompare(b, "es"));
+    }
+
     const options = statusAndSearchFilteredItems
       .filter((item) => {
         const marcaValue = getInventoryFacetMarca(item);
@@ -3107,6 +3174,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
     return Array.from(new Set(options)).sort((a, b) => a.localeCompare(b, "es"));
   }, [
+    useServerPagination,
+    serverFacetOptions.pieza,
+    normalizedInventoryPiezaFilter,
     statusAndSearchFilteredItems,
     normalizedInventoryMarcaFilter,
     normalizedInventoryCocheFilter,
@@ -3120,6 +3190,14 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
   const inventoryPrestadoDebtorOptions = useMemo(() => {
     if (normalizedStatusFilter !== "PRESTADO") return [];
+
+    if (useServerPagination) {
+      const base = serverFacetOptions.prestadoDebtor;
+      if (!normalizedPrestadoDebtorFilters.length) return base;
+      return Array.from(new Set([...normalizedPrestadoDebtorFilters, ...base])).sort((a, b) =>
+        a.localeCompare(b, "es")
+      );
+    }
 
     const options = statusAndSearchFilteredItems
       .filter((item) => {
@@ -3136,6 +3214,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
     return Array.from(new Set(options)).sort((a, b) => a.localeCompare(b, "es"));
   }, [
+    useServerPagination,
+    serverFacetOptions.prestadoDebtor,
+    normalizedPrestadoDebtorFilters,
     statusAndSearchFilteredItems,
     normalizedStatusFilter,
     normalizedInventoryMarcaFilter,

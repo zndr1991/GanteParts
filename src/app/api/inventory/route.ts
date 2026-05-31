@@ -220,6 +220,17 @@ type PrestadoMetrics = {
   profit: number;
 };
 
+type InventoryFacetOptions = {
+  marca: string[];
+  coche: string[];
+  pieza: string[];
+  prestadoDebtor: string[];
+};
+
+type FacetValueRow = {
+  value: string | null;
+};
+
 type StatusTotalsCacheEntry = {
   value: Record<string, number>;
   expiresAt: number;
@@ -236,6 +247,118 @@ const invalidateStatusTotalsCache = () => {
 };
 
 const roundCurrencyValue = (value: number) => Math.round(value * 100) / 100;
+
+const FACET_MARCA_SQL = Prisma.sql`COALESCE(NULLIF(UPPER(TRIM("extraData"->>'marca')), ''), '')`;
+const FACET_COCHE_SQL = Prisma.sql`COALESCE(NULLIF(UPPER(TRIM("extraData"->>'coche')), ''), '')`;
+const FACET_PIEZA_SQL = Prisma.sql`
+  COALESCE(
+    NULLIF(UPPER(TRIM("extraData"->>'pieza')), ''),
+    UPPER(TRIM(COALESCE("title", ''))),
+    ''
+  )
+`;
+const FACET_PRESTADO_DEBTOR_SQL = Prisma.sql`COALESCE(NULLIF(UPPER(TRIM("extraData"->>'prestado_vendido_a')), ''), '')`;
+
+const normalizeFacetValues = (rows: FacetValueRow[]) => {
+  const set = new Set<string>();
+  rows.forEach((row) => {
+    const value = (row.value ?? "").toString().trim().toUpperCase();
+    if (!value.length) return;
+    set.add(value);
+  });
+  return Array.from(set).sort((a, b) => a.localeCompare(b, "es"));
+};
+
+const queryDistinctFacetValues = async (params: {
+  facetSql: Prisma.Sql;
+  ownerSql: Prisma.Sql;
+  statusSql: Prisma.Sql;
+  searchSql: Prisma.Sql;
+  marcaSql?: Prisma.Sql;
+  cocheSql?: Prisma.Sql;
+  piezaSql?: Prisma.Sql;
+  prestadoDebtorSql?: Prisma.Sql;
+}) => {
+  const rows = await prisma.$queryRaw<FacetValueRow[]>(Prisma.sql`
+    SELECT DISTINCT facet_value AS value
+    FROM (
+      SELECT ${params.facetSql} AS facet_value
+      FROM "InventoryItem"
+      WHERE 1=1
+      ${params.ownerSql}
+      ${params.statusSql}
+      ${params.searchSql}
+      ${params.marcaSql ?? Prisma.empty}
+      ${params.cocheSql ?? Prisma.empty}
+      ${params.piezaSql ?? Prisma.empty}
+      ${params.prestadoDebtorSql ?? Prisma.empty}
+    ) AS facets
+    WHERE facet_value IS NOT NULL
+      AND facet_value <> ''
+    ORDER BY facet_value ASC
+  `);
+
+  return normalizeFacetValues(rows);
+};
+
+const getInventoryFacetOptions = async (params: {
+  ownerSql: Prisma.Sql;
+  statusSql: Prisma.Sql;
+  searchSql: Prisma.Sql;
+  marcaSql: Prisma.Sql;
+  cocheSql: Prisma.Sql;
+  piezaSql: Prisma.Sql;
+  prestadoDebtorSql: Prisma.Sql;
+  statusFilter: string | null;
+}): Promise<InventoryFacetOptions> => {
+  const [marca, coche, pieza, prestadoDebtor] = await Promise.all([
+    queryDistinctFacetValues({
+      facetSql: FACET_MARCA_SQL,
+      ownerSql: params.ownerSql,
+      statusSql: params.statusSql,
+      searchSql: params.searchSql,
+      cocheSql: params.cocheSql,
+      piezaSql: params.piezaSql,
+      prestadoDebtorSql: params.prestadoDebtorSql
+    }),
+    queryDistinctFacetValues({
+      facetSql: FACET_COCHE_SQL,
+      ownerSql: params.ownerSql,
+      statusSql: params.statusSql,
+      searchSql: params.searchSql,
+      marcaSql: params.marcaSql,
+      piezaSql: params.piezaSql,
+      prestadoDebtorSql: params.prestadoDebtorSql
+    }),
+    queryDistinctFacetValues({
+      facetSql: FACET_PIEZA_SQL,
+      ownerSql: params.ownerSql,
+      statusSql: params.statusSql,
+      searchSql: params.searchSql,
+      marcaSql: params.marcaSql,
+      cocheSql: params.cocheSql,
+      prestadoDebtorSql: params.prestadoDebtorSql
+    }),
+    params.statusFilter === "PRESTADO"
+      ? queryDistinctFacetValues({
+          facetSql: FACET_PRESTADO_DEBTOR_SQL,
+          ownerSql: params.ownerSql,
+          statusSql: params.statusSql,
+          searchSql: params.searchSql,
+          marcaSql: params.marcaSql,
+          cocheSql: params.cocheSql,
+          piezaSql: params.piezaSql
+        })
+      : Promise.resolve<string[]>([])
+  ]);
+
+  return {
+    marca,
+    coche,
+    pieza,
+    prestadoDebtor
+  };
+};
 
 const parseNumericValue = (value: number | bigint | string | null | undefined) => {
   if (value === null || value === undefined) return 0;
@@ -366,6 +489,14 @@ export async function GET(req: Request) {
     const piezaFilter = parseFacetFilter(searchParams, "piezaFilter");
     const prestadoDebtorFilters = parsePrestadoDebtorFilters(searchParams);
 
+    const ownerSql = ownerId ? Prisma.sql`AND "ownerId" = ${ownerId}` : Prisma.empty;
+    const statusSql = buildStatusFilterSql(statusFilter);
+    const searchSql = buildSearchFilterSql(searchFilter);
+    const marcaSql = buildMarcaFilterSql(marcaFilter);
+    const cocheSql = buildCocheFilterSql(cocheFilter);
+    const piezaSql = buildPiezaFilterSql(piezaFilter);
+    const prestadoDebtorSql = buildPrestadoDebtorFilterSql(prestadoDebtorFilters);
+
     if (statusFilter || searchFilter || marcaFilter || cocheFilter || piezaFilter || prestadoDebtorFilters.length) {
       const normalizedSearchToken = searchFilter ? normalizeSearchToken(searchFilter) : "";
       const codeSearchMode = Boolean(searchFilter && isLikelyCodeSearch(searchFilter, normalizedSearchToken));
@@ -373,15 +504,7 @@ export async function GET(req: Request) {
         codeSearchMode && !statusFilter && !marcaFilter && !cocheFilter && !piezaFilter && !prestadoDebtorFilters.length && page === 1;
       const shouldLoadPrestadoMetrics = statusFilter === "PRESTADO";
 
-      const ownerSql = ownerId ? Prisma.sql`AND "ownerId" = ${ownerId}` : Prisma.empty;
-      const statusSql = buildStatusFilterSql(statusFilter);
-      const searchSql = buildSearchFilterSql(searchFilter);
-      const marcaSql = buildMarcaFilterSql(marcaFilter);
-      const cocheSql = buildCocheFilterSql(cocheFilter);
-      const piezaSql = buildPiezaFilterSql(piezaFilter);
-      const prestadoDebtorSql = buildPrestadoDebtorFilterSql(prestadoDebtorFilters);
-
-      const [idRows, countRows, statusTotals, prestadoMetrics] = await Promise.all([
+      const [idRows, countRows, statusTotals, prestadoMetrics, facetOptions] = await Promise.all([
         prisma.$queryRaw<InventoryIdRow[]>(Prisma.sql`
           SELECT "id"
           FROM "InventoryItem"
@@ -414,7 +537,17 @@ export async function GET(req: Request) {
         getStatusTotals(ownerId),
         shouldLoadPrestadoMetrics
           ? getPrestadoMetrics({ ownerSql, statusSql, searchSql, marcaSql, cocheSql, piezaSql, prestadoDebtorSql })
-          : Promise.resolve<PrestadoMetrics | null>(null)
+          : Promise.resolve<PrestadoMetrics | null>(null),
+        getInventoryFacetOptions({
+          ownerSql,
+          statusSql,
+          searchSql,
+          marcaSql,
+          cocheSql,
+          piezaSql,
+          prestadoDebtorSql,
+          statusFilter
+        })
       ]);
 
       const hasMoreFastRows = fastCodeSearchMode && idRows.length > pageSize;
@@ -441,11 +574,12 @@ export async function GET(req: Request) {
         totalPages,
         statusTotals,
         prestadoMetrics,
+        facetOptions,
         items: serialized
       });
     }
 
-    const [items, total, statusTotals] = await Promise.all([
+    const [items, total, statusTotals, facetOptions] = await Promise.all([
       prisma.inventoryItem.findMany({
         where,
         orderBy: { updatedAt: "desc" },
@@ -453,7 +587,17 @@ export async function GET(req: Request) {
         take: pageSize
       }),
       prisma.inventoryItem.count({ where }),
-      getStatusTotals(ownerId)
+      getStatusTotals(ownerId),
+      getInventoryFacetOptions({
+        ownerSql,
+        statusSql,
+        searchSql,
+        marcaSql,
+        cocheSql,
+        piezaSql,
+        prestadoDebtorSql,
+        statusFilter
+      })
     ]);
 
     const serialized = items.map((item) => serializeInventoryItem(item));
@@ -465,6 +609,7 @@ export async function GET(req: Request) {
       total,
       totalPages,
       statusTotals,
+      facetOptions,
       items: serialized
     });
   } catch (err: any) {
