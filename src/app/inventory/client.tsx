@@ -5259,13 +5259,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                       <p className="text-[10px] uppercase tracking-[0.18em] text-slate-400">SKU</p>
                       <p className="mt-1 text-sm font-semibold text-white">{item.skuInternal || "-"}</p>
 
-                      <p className="mt-3 text-[13px] leading-snug text-slate-100">
-                        <span className="font-semibold">{pieceName}</span>
-                        <span className="text-slate-400">
-                          {` · ${(extra.marca ?? "-").toString()} · ${(extra.coche ?? "-").toString()} · ${yearLabel}`}
-                        </span>
-                      </p>
-
                       <button
                         type="button"
                         className={`mt-3 relative block h-44 w-full overflow-hidden rounded-xl border border-slate-700/80 bg-slate-950 ${
@@ -5309,23 +5302,27 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
                       <div className="mt-3 overflow-hidden rounded-xl border border-slate-700/80 bg-slate-950/45 text-sm">
                         <div className="flex items-center justify-between border-b border-slate-700/70 px-3 py-2">
-                          <span className="text-[11px] uppercase tracking-wide text-slate-400">Marca</span>
+                          <span className="text-[11px] uppercase tracking-wide text-slate-400">PIEZA</span>
+                          <span className="font-medium text-slate-100">{pieceName}</span>
+                        </div>
+                        <div className="flex items-center justify-between border-b border-slate-700/70 px-3 py-2">
+                          <span className="text-[11px] uppercase tracking-wide text-slate-400">MARCA</span>
                           <span className="font-medium text-slate-100">{(extra.marca ?? "-").toString()}</span>
                         </div>
                         <div className="flex items-center justify-between border-b border-slate-700/70 px-3 py-2">
-                          <span className="text-[11px] uppercase tracking-wide text-slate-400">Coche</span>
+                          <span className="text-[11px] uppercase tracking-wide text-slate-400">COCHE</span>
                           <span className="font-medium text-slate-100">{(extra.coche ?? "-").toString()}</span>
                         </div>
                         <div className="flex items-center justify-between border-b border-slate-700/70 px-3 py-2">
-                          <span className="text-[11px] uppercase tracking-wide text-slate-400">Años</span>
+                          <span className="text-[11px] uppercase tracking-wide text-slate-400">AÑOS</span>
                           <span className="font-medium text-slate-100">{yearLabel}</span>
                         </div>
                         <div className="flex items-center justify-between border-b border-slate-700/70 px-3 py-2">
-                          <span className="text-[11px] uppercase tracking-wide text-slate-400">Codigo ML</span>
+                          <span className="text-[11px] uppercase tracking-wide text-slate-400">CODIGO ML</span>
                           <span className="font-medium text-slate-100">{item.mlItemId || "-"}</span>
                         </div>
                         <div className="flex items-center justify-between px-3 py-2">
-                          <span className="text-[11px] uppercase tracking-wide text-slate-400">Precio</span>
+                          <span className="text-[11px] uppercase tracking-wide text-slate-400">PRECIO</span>
                           <span className="font-semibold text-emerald-300">{formatCurrencyMx(item.price)}</span>
                         </div>
                       </div>
