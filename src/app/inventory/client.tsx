@@ -5164,65 +5164,64 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
               </div>
             </div>
           )}
-          {filteredItems.length > 0 && (
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-700 bg-slate-900/60 p-3 text-xs text-slate-300">
-              <span>
-                Página {inventoryPage} de {filteredTotalPages} · registros {paginatedVisibleStart}-{paginatedVisibleEnd}
-              </span>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setInventoryPage(1)}
-                  disabled={inventoryPage === 1}
-                  className="rounded-md border border-slate-600 px-2 py-1 text-xs hover:border-amber-400 disabled:opacity-50"
-                >
-                  «
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setInventoryPage((prev) => Math.max(1, prev - 1))}
-                  disabled={inventoryPage === 1}
-                  className="rounded-md border border-slate-600 px-3 py-1 text-xs hover:border-amber-400 disabled:opacity-50"
-                >
-                  Anterior
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setInventoryPage((prev) => Math.min(filteredTotalPages, prev + 1))}
-                  disabled={inventoryPage >= filteredTotalPages}
-                  className="rounded-md border border-slate-600 px-3 py-1 text-xs hover:border-amber-400 disabled:opacity-50"
-                >
-                  Siguiente
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setInventoryPage(filteredTotalPages)}
-                  disabled={inventoryPage >= filteredTotalPages}
-                  className="rounded-md border border-slate-600 px-2 py-1 text-xs hover:border-amber-400 disabled:opacity-50"
-                >
-                  »
-                </button>
-              </div>
-            </div>
-          )}
           {loadingPage ? (
-            <div className="flex items-center gap-2 text-xs text-slate-400">
+            <div className="mt-6 flex min-h-[360px] items-center justify-center rounded-2xl border border-slate-700 bg-slate-900/60 p-6">
               <img
                 src="/assets/inventory-loading.gif"
                 alt="Cargando registros"
-                className="h-5 w-5 rounded-sm object-cover"
+                className="h-24 w-24 rounded-xl object-cover"
                 loading="eager"
                 decoding="async"
               />
-              <span>Cargando registros...</span>
             </div>
           ) : (
-            <p className="text-xs text-slate-400">
-              {`Mostrando ${paginatedVisibleStart}-${paginatedVisibleEnd} de ${
-                useServerPagination ? totalItems : filteredItems.length
-              } filtrados (${items.length} cargados${useServerPagination ? " en esta pagina" : ""})`}
-            </p>
-          )}
+            <>
+              {filteredItems.length > 0 && (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-700 bg-slate-900/60 p-3 text-xs text-slate-300">
+                  <span>
+                    Página {inventoryPage} de {filteredTotalPages} · registros {paginatedVisibleStart}-{paginatedVisibleEnd}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setInventoryPage(1)}
+                      disabled={inventoryPage === 1}
+                      className="rounded-md border border-slate-600 px-2 py-1 text-xs hover:border-amber-400 disabled:opacity-50"
+                    >
+                      «
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setInventoryPage((prev) => Math.max(1, prev - 1))}
+                      disabled={inventoryPage === 1}
+                      className="rounded-md border border-slate-600 px-3 py-1 text-xs hover:border-amber-400 disabled:opacity-50"
+                    >
+                      Anterior
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setInventoryPage((prev) => Math.min(filteredTotalPages, prev + 1))}
+                      disabled={inventoryPage >= filteredTotalPages}
+                      className="rounded-md border border-slate-600 px-3 py-1 text-xs hover:border-amber-400 disabled:opacity-50"
+                    >
+                      Siguiente
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setInventoryPage(filteredTotalPages)}
+                      disabled={inventoryPage >= filteredTotalPages}
+                      className="rounded-md border border-slate-600 px-2 py-1 text-xs hover:border-amber-400 disabled:opacity-50"
+                    >
+                      »
+                    </button>
+                  </div>
+                </div>
+              )}
+              <p className="text-xs text-slate-400">
+                {`Mostrando ${paginatedVisibleStart}-${paginatedVisibleEnd} de ${
+                  useServerPagination ? totalItems : filteredItems.length
+                } filtrados (${items.length} cargados${useServerPagination ? " en esta pagina" : ""})`}
+              </p>
           {isMobile && (
           <div className="mt-4 space-y-3">
             {filteredItems.length === 0 ? (
@@ -5876,6 +5875,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
               </table>
             )}
           </div>
+          )}
+            </>
           )}
         </section>
         </>
