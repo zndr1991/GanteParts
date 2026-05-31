@@ -655,6 +655,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [manualNomenclatureGroups, setManualNomenclatureGroups] = useState<ManualNomenclatureGroup[]>([]);
   const [manualNomenclaturePrefixDraft, setManualNomenclaturePrefixDraft] = useState("");
   const [manualNomenclaturePieceDraft, setManualNomenclaturePieceDraft] = useState("");
+  const [manualNomenclatureSearch, setManualNomenclatureSearch] = useState("");
   const [manualNomenclatureSelectedId, setManualNomenclatureSelectedId] = useState("");
   const [manualNomenclatureLoading, setManualNomenclatureLoading] = useState(false);
   const [manualNomenclatureError, setManualNomenclatureError] = useState<string | null>(null);
@@ -2611,6 +2612,31 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     if (!manualNomenclatureSelectedId) return null;
     return manualNomenclatureGroups.find((group) => group.id === manualNomenclatureSelectedId) ?? null;
   }, [manualNomenclatureGroups, manualNomenclatureSelectedId]);
+
+  const normalizedManualNomenclatureSearch = useMemo(() => {
+    return normalizeManualNomenclaturePiece(manualNomenclatureSearch);
+  }, [manualNomenclatureSearch]);
+
+  const filteredManualNomenclatureGroups = useMemo(() => {
+    if (!normalizedManualNomenclatureSearch.length) return manualNomenclatureGroups;
+
+    return manualNomenclatureGroups.filter((group) => {
+      if (group.prefix.includes(normalizedManualNomenclatureSearch)) return true;
+      return group.pieces.some((entry) => entry.piece.includes(normalizedManualNomenclatureSearch));
+    });
+  }, [manualNomenclatureGroups, normalizedManualNomenclatureSearch]);
+
+  const filteredSelectedManualNomenclaturePieces = useMemo(() => {
+    if (!selectedManualNomenclature) return [];
+    if (!normalizedManualNomenclatureSearch.length) return selectedManualNomenclature.pieces;
+    if (selectedManualNomenclature.prefix.includes(normalizedManualNomenclatureSearch)) {
+      return selectedManualNomenclature.pieces;
+    }
+
+    return selectedManualNomenclature.pieces.filter((entry) =>
+      entry.piece.includes(normalizedManualNomenclatureSearch)
+    );
+  }, [normalizedManualNomenclatureSearch, selectedManualNomenclature]);
 
   const fetchManualNomenclatures = useCallback(async (preferredSelectionId?: string) => {
     if (!isManualOnly) return;
@@ -4682,36 +4708,48 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
                       {manualNomenclatureGroups.length > 0 ? (
                         <div className="space-y-2">
-                          <p className="text-xs text-slate-400">Nomenclaturas registradas</p>
-                          {manualNomenclatureGroups.map((group) => {
-                            const isSelected = group.id === manualNomenclatureSelectedId;
-                            return (
-                              <div
-                                key={group.id}
-                                className={`flex flex-col gap-2 rounded-lg border p-2 sm:flex-row sm:items-center sm:justify-between ${
-                                  isSelected
-                                    ? "border-emerald-400/50 bg-emerald-500/10"
-                                    : "border-slate-700 bg-slate-950/60"
-                                }`}
-                              >
-                                <button
-                                  type="button"
-                                  onClick={() => setManualNomenclatureSelectedId(group.id)}
-                                  className="text-left text-sm text-slate-100"
+                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_2fr] sm:items-center">
+                            <p className="text-xs text-slate-400">Nomenclaturas registradas</p>
+                            <input
+                              className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                              placeholder="Buscar nomenclatura o pieza"
+                              value={manualNomenclatureSearch}
+                              onChange={(e) => setManualNomenclatureSearch(e.target.value.toUpperCase())}
+                            />
+                          </div>
+                          {filteredManualNomenclatureGroups.length > 0 ? (
+                            filteredManualNomenclatureGroups.map((group) => {
+                              const isSelected = group.id === manualNomenclatureSelectedId;
+                              return (
+                                <div
+                                  key={group.id}
+                                  className={`flex flex-col gap-2 rounded-lg border p-2 sm:flex-row sm:items-center sm:justify-between ${
+                                    isSelected
+                                      ? "border-emerald-400/50 bg-emerald-500/10"
+                                      : "border-slate-700 bg-slate-950/60"
+                                  }`}
                                 >
-                                  <span className="font-mono font-semibold tracking-wide text-emerald-200">{group.prefix}</span>
-                                  <span className="ml-2 text-xs text-slate-400">{group.pieces.length} piezas</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => removeManualNomenclature(group.id)}
-                                  className="self-start rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-rose-200 hover:bg-rose-500/20 sm:self-auto"
-                                >
-                                  Eliminar nomenclatura
-                                </button>
-                              </div>
-                            );
-                          })}
+                                  <button
+                                    type="button"
+                                    onClick={() => setManualNomenclatureSelectedId(group.id)}
+                                    className="text-left text-sm text-slate-100"
+                                  >
+                                    <span className="font-mono font-semibold tracking-wide text-emerald-200">{group.prefix}</span>
+                                    <span className="ml-2 text-xs text-slate-400">{group.pieces.length} piezas</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeManualNomenclature(group.id)}
+                                    className="self-start rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-rose-200 hover:bg-rose-500/20 sm:self-auto"
+                                  >
+                                    Eliminar nomenclatura
+                                  </button>
+                                </div>
+                              );
+                            })
+                          ) : (
+                            <p className="text-sm text-slate-400">No hay coincidencias para la busqueda.</p>
+                          )}
                         </div>
                       ) : (
                         <p className="text-sm text-slate-400">Todavia no hay nomenclaturas configuradas.</p>
@@ -4758,9 +4796,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                           <p className="text-xs text-slate-400">
                             Piezas exactas para <span className="font-mono text-emerald-200">{selectedManualNomenclature.prefix}</span>
                           </p>
-                          {selectedManualNomenclature.pieces.length > 0 ? (
+                          {filteredSelectedManualNomenclaturePieces.length > 0 ? (
                             <div className="space-y-2">
-                              {selectedManualNomenclature.pieces.map((pieceEntry) => (
+                              {filteredSelectedManualNomenclaturePieces.map((pieceEntry) => (
                                 <div
                                   key={pieceEntry.id}
                                   className="flex flex-col gap-2 rounded-lg border border-slate-700 bg-slate-950/60 p-2 sm:flex-row sm:items-center sm:justify-between"
@@ -4777,7 +4815,11 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                               ))}
                             </div>
                           ) : (
-                            <p className="text-sm text-slate-400">Esta nomenclatura todavía no tiene piezas.</p>
+                            <p className="text-sm text-slate-400">
+                              {normalizedManualNomenclatureSearch.length
+                                ? "No hay piezas que coincidan con la busqueda en esta nomenclatura."
+                                : "Esta nomenclatura todavía no tiene piezas."}
+                            </p>
                           )}
                         </div>
                       ) : (
