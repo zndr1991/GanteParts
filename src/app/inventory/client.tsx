@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MAX_ITEM_PHOTOS } from "@/lib/inventory-serialization";
 
 type Item = {
@@ -211,7 +211,7 @@ const TABLE_OVERSCAN_ROWS = 8;
 const INVENTORY_TABLE_COLUMN_COUNT = 27;
 const WORKER_SEARCH_MIN_ITEMS = 250;
 const INVENTORY_PAGE_BLOCK_SIZE = 40;
-const SERVER_SEARCH_DEBOUNCE_MS = 320;
+const SERVER_SEARCH_DEBOUNCE_MS = 120;
 const INVENTORY_PAGE_CACHE_TTL_MS = 25_000;
 const INVENTORY_LOADING_INDICATOR_DELAY_MS = 180;
 const MANUAL_SKU_NUMBER_PADDING = 5;
@@ -3449,8 +3449,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     }
   }, [canEditInventory, inventoryEditForm, registerSoldItemInFinance]);
 
-  const deferredSearch = useDeferredValue(search);
-  const serverSearchTerm = deferredSearch.trim();
+  const serverSearchTerm = search.trim();
   const normalizedSearch = serverSearchTerm.toLowerCase();
   const canUseWorkerSearch = !useServerPagination && items.length >= WORKER_SEARCH_MIN_ITEMS;
 
@@ -3562,6 +3561,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   useEffect(() => {
     if (!useServerPagination) return;
 
+    const shouldIncludeFacetOptions =
+      inventoryPage === 1 && debouncedServerSearchTerm.length === 0;
+
     void fetchInventoryPage({
       page: inventoryPage,
       search: debouncedServerSearchTerm,
@@ -3570,7 +3572,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       cocheFilter: normalizedInventoryCocheFilter,
       piezaFilter: normalizedInventoryPiezaFilter,
       prestadoDebtorFilters: normalizedStatusFilter === "PRESTADO" ? normalizedPrestadoDebtorFilters : [],
-      includeFacetOptions: inventoryPage === 1,
+      includeFacetOptions: shouldIncludeFacetOptions,
       preserveSelection: false
     });
   }, [

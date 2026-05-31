@@ -507,8 +507,11 @@ export async function GET(req: Request) {
     if (statusFilter || searchFilter || marcaFilter || cocheFilter || piezaFilter || prestadoDebtorFilters.length) {
       const normalizedSearchToken = searchFilter ? normalizeSearchToken(searchFilter) : "";
       const codeSearchMode = Boolean(searchFilter && isLikelyCodeSearch(searchFilter, normalizedSearchToken));
-      const fastCodeSearchMode =
-        codeSearchMode && !statusFilter && !marcaFilter && !cocheFilter && !piezaFilter && !prestadoDebtorFilters.length && page === 1;
+      const hasNoAdditionalFilters =
+        !statusFilter && !marcaFilter && !cocheFilter && !piezaFilter && !prestadoDebtorFilters.length;
+      const fastSearchMode = Boolean(searchFilter && hasNoAdditionalFilters && page === 1);
+      const fastCodeSearchMode = codeSearchMode && fastSearchMode;
+      const shouldUseFastCount = fastSearchMode || fastCodeSearchMode;
       const shouldLoadPrestadoMetrics = statusFilter === "PRESTADO";
 
       const [idRows, countRows, statusTotals, prestadoMetrics, facetOptions] = await Promise.all([
@@ -525,9 +528,9 @@ export async function GET(req: Request) {
           ${prestadoDebtorSql}
           ORDER BY "updatedAt" DESC
           OFFSET ${skip}
-          LIMIT ${fastCodeSearchMode ? pageSize + 1 : pageSize}
+          LIMIT ${shouldUseFastCount ? pageSize + 1 : pageSize}
         `),
-        fastCodeSearchMode
+        shouldUseFastCount
           ? Promise.resolve<CountRow[]>([])
           : prisma.$queryRaw<CountRow[]>(Prisma.sql`
               SELECT COUNT(*) AS count
@@ -559,7 +562,7 @@ export async function GET(req: Request) {
           : Promise.resolve<InventoryFacetOptions | null>(null)
       ]);
 
-      const hasMoreFastRows = fastCodeSearchMode && idRows.length > pageSize;
+      const hasMoreFastRows = shouldUseFastCount && idRows.length > pageSize;
       const ids = (hasMoreFastRows ? idRows.slice(0, pageSize) : idRows).map((row) => row.id);
       const items = ids.length
         ? await prisma.inventoryItem.findMany({
@@ -568,7 +571,7 @@ export async function GET(req: Request) {
           })
         : [];
 
-      const total = fastCodeSearchMode
+      const total = shouldUseFastCount
         ? hasMoreFastRows
           ? pageSize + 1
           : ids.length
