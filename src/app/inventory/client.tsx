@@ -5252,139 +5252,161 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 return (
                   <article
                     key={item.id}
-                    className={`rounded-2xl border border-slate-700 bg-slate-900/60 p-3 shadow-sm ${cardStatusClass}`}
+                    className={`group overflow-hidden rounded-3xl border border-slate-700/80 bg-slate-900/70 shadow-lg shadow-black/30 ${cardStatusClass}`}
                     onClick={() => setFocusedRowInfo(toFocusedInfo(item))}
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold leading-tight text-white">{pieceName}</p>
-                        <p className="mt-1 text-[11px] text-slate-400">
-                          SKU: {item.skuInternal || "-"}
-                        </p>
-                      </div>
-                      <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase ${getStatusBadgeClass(item.status)}`}>
-                        {item.status || "sin estatus"}
-                      </span>
-                    </div>
+                    <div className="relative">
+                      <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-amber-400/5 via-transparent to-sky-400/10" />
+                      <div className="relative p-3.5">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-[15px] font-semibold leading-tight text-white">{pieceName}</p>
+                            <p className="mt-1 text-[11px] text-slate-300">
+                              SKU: {item.skuInternal || "-"}
+                            </p>
+                          </div>
+                          <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase ${getStatusBadgeClass(item.status)}`}>
+                            {item.status || "sin estatus"}
+                          </span>
+                        </div>
 
-                    <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                      <div className="rounded-lg border border-slate-700 bg-slate-950/40 p-2">
-                        <p className="text-[10px] uppercase tracking-wide text-slate-400">Precio</p>
-                        <p className="font-semibold text-emerald-300">{formatCurrencyMx(item.price)}</p>
-                      </div>
-                      <div className="rounded-lg border border-slate-700 bg-slate-950/40 p-2">
-                        <p className="text-[10px] uppercase tracking-wide text-slate-400">Stock</p>
-                        <p className="font-semibold text-slate-100">{item.stock}</p>
-                      </div>
-                      <div className="rounded-lg border border-slate-700 bg-slate-950/40 p-2">
-                        <p className="text-[10px] uppercase tracking-wide text-slate-400">Marca / Coche</p>
-                        <p className="font-semibold text-slate-100">
-                          {(extra.marca ?? "-").toString()} / {(extra.coche ?? "-").toString()}
-                        </p>
-                      </div>
-                      <div className="rounded-lg border border-slate-700 bg-slate-950/40 p-2">
-                        <p className="text-[10px] uppercase tracking-wide text-slate-400">Año / Ubicacion</p>
-                        <p className="font-semibold text-slate-100">{yearLabel} / {(extra.ubicacion ?? "-").toString()}</p>
-                      </div>
-                    </div>
-
-                    <div className="mt-3 flex items-center gap-3">
-                      <input
-                        type="checkbox"
-                        className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-amber-400 focus:ring-amber-400"
-                        checked={isSelected}
-                        onChange={(event) => {
-                          event.stopPropagation();
-                          toggleItemSelection(item.id);
-                        }}
-                      />
-
-                      {canEditInventory ? (
-                        <select
-                          value={internalStatusRaw}
-                          onChange={(event) => {
+                        <button
+                          type="button"
+                          className={`mt-3 relative block h-44 w-full overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-950/70 ${
+                            canEditInventory ? "hover:border-amber-300" : "opacity-80"
+                          }`}
+                          onClick={(event) => {
                             event.stopPropagation();
-                            handleEstatusInternoChange(item, event.target.value);
+                            if (canEditInventory) {
+                              openPhotoModal(item);
+                            }
                           }}
-                          className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
+                          disabled={!canEditInventory}
+                          aria-label={photosCount ? "Ver fotos" : "Sin fotos"}
                         >
-                          <option value="">SIN ESTATUS</option>
-                          {sortedEstatusInternoOptions.map((option) => (
-                            <option key={option} value={option}>
-                              {option}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <span className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-slate-200">
-                          {internalStatus}
-                        </span>
-                      )}
+                          {previewEnabled ? (
+                            <>
+                              <img
+                                src={previewSrc ?? undefined}
+                                alt={`Miniatura ${pieceName}`}
+                                className="h-full w-full object-cover transition-transform duration-300 group-active:scale-[0.98]"
+                                loading="lazy"
+                                decoding="async"
+                                onError={(event) => {
+                                  event.currentTarget.style.display = "none";
+                                }}
+                              />
+                              <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/95 via-slate-950/70 to-transparent px-3 py-2 text-left">
+                                <p className="text-[10px] uppercase tracking-[0.18em] text-amber-200/90">Miniatura</p>
+                                <p className="mt-0.5 text-xs font-semibold text-white">{photosCount} fotos</p>
+                              </div>
+                            </>
+                          ) : (
+                            <div className="flex h-full flex-col items-center justify-center gap-2 text-slate-400">
+                              <span className="rounded-full border border-slate-600/70 px-3 py-1 text-[10px] uppercase tracking-[0.18em]">
+                                Sin foto
+                              </span>
+                              <span className="text-xs text-slate-500">
+                                {canEditInventory ? "Toca para administrar" : "Sin permisos de edicion"}
+                              </span>
+                            </div>
+                          )}
+                        </button>
 
-                      <button
-                        type="button"
-                        className={`ml-auto relative flex h-14 w-14 items-center justify-center overflow-hidden rounded-xl border border-slate-800 bg-slate-950/60 text-[10px] text-slate-500 ${
-                          canEditInventory ? "hover:border-amber-300" : "opacity-60"
-                        }`}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          if (canEditInventory) {
-                            openPhotoModal(item);
-                          }
-                        }}
-                        disabled={!canEditInventory}
-                        aria-label={photosCount ? "Ver fotos" : "Sin fotos"}
-                      >
-                        {previewEnabled ? (
-                          <>
-                            <span className="absolute inset-0 flex items-center justify-center text-slate-400">Foto</span>
-                            <img
-                              src={previewSrc ?? undefined}
-                              alt={`Miniatura ${pieceName}`}
-                              className="relative h-full w-full object-cover"
-                              loading="lazy"
-                              decoding="async"
-                              onError={(event) => {
-                                event.currentTarget.style.display = "none";
+                        <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                          <div className="rounded-xl border border-emerald-400/20 bg-emerald-950/20 p-2.5">
+                            <p className="text-[10px] uppercase tracking-wide text-emerald-200/80">Precio</p>
+                            <p className="font-semibold text-emerald-300">{formatCurrencyMx(item.price)}</p>
+                          </div>
+                          <div className="rounded-xl border border-slate-700 bg-slate-950/60 p-2.5">
+                            <p className="text-[10px] uppercase tracking-wide text-slate-400">Stock</p>
+                            <p className="font-semibold text-slate-100">{item.stock}</p>
+                          </div>
+                        </div>
+
+                        <div className="mt-2 grid grid-cols-1 gap-2 text-xs">
+                          <div className="rounded-xl border border-slate-700 bg-slate-950/55 p-2.5">
+                            <p className="text-[10px] uppercase tracking-wide text-slate-400">Marca / Coche</p>
+                            <p className="font-semibold text-slate-100">
+                              {(extra.marca ?? "-").toString()} / {(extra.coche ?? "-").toString()}
+                            </p>
+                          </div>
+                          <div className="rounded-xl border border-slate-700 bg-slate-950/55 p-2.5">
+                            <p className="text-[10px] uppercase tracking-wide text-slate-400">Año / Ubicacion</p>
+                            <p className="font-semibold text-slate-100">{yearLabel} / {(extra.ubicacion ?? "-").toString()}</p>
+                          </div>
+                        </div>
+
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <label className="inline-flex items-center gap-2 rounded-md border border-slate-700 bg-slate-950/70 px-2 py-1 text-[11px] text-slate-300">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-amber-400 focus:ring-amber-400"
+                              checked={isSelected}
+                              onChange={(event) => {
+                                event.stopPropagation();
+                                toggleItemSelection(item.id);
                               }}
                             />
-                          </>
-                        ) : (
-                          <span className="text-slate-400">Sin</span>
+                            Sel
+                          </label>
+
+                          {canEditInventory ? (
+                            <select
+                              value={internalStatusRaw}
+                              onChange={(event) => {
+                                event.stopPropagation();
+                                handleEstatusInternoChange(item, event.target.value);
+                              }}
+                              className="min-w-[150px] flex-1 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
+                            >
+                              <option value="">SIN ESTATUS</option>
+                              {sortedEstatusInternoOptions.map((option) => (
+                                <option key={option} value={option}>
+                                  {option}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <span className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-slate-200">
+                              {internalStatus}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-slate-300">
+                          <span className="rounded-full border border-slate-600 bg-slate-950/70 px-2.5 py-1">ML: {item.mlItemId || "-"}</span>
+                          <span className="rounded-full border border-slate-600 bg-slate-950/70 px-2.5 py-1">
+                            {photosCount ? `${photosCount} fotos` : "Sin fotos"}
+                          </span>
+                        </div>
+
+                        {canEditInventory && (
+                          <div className="mt-3 grid grid-cols-2 gap-2">
+                            <button
+                              type="button"
+                              className="rounded-md border border-amber-400/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-amber-200 hover:border-amber-300"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                openInventoryEditModal(item);
+                              }}
+                            >
+                              Editar
+                            </button>
+                            <button
+                              type="button"
+                              className="rounded-md border border-rose-400/40 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-rose-200 hover:border-rose-300"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                requestDeleteAuthorization([item.id]);
+                              }}
+                            >
+                              Borrar
+                            </button>
+                          </div>
                         )}
-                      </button>
-                    </div>
-
-                    <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
-                      <span>ML: {item.mlItemId || "-"}</span>
-                      <span>•</span>
-                      <span>{photosCount ? `${photosCount} fotos` : "Sin fotos"}</span>
-                    </div>
-
-                    {canEditInventory && (
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          className="rounded-md border border-amber-400/60 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-200 hover:border-amber-300"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            openInventoryEditModal(item);
-                          }}
-                        >
-                          Editar
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded-md border border-rose-400/40 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-rose-200 hover:border-rose-300"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            requestDeleteAuthorization([item.id]);
-                          }}
-                        >
-                          Borrar
-                        </button>
                       </div>
-                    )}
+                    </div>
                   </article>
                 );
               })
