@@ -932,6 +932,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     cocheFilter: string;
     piezaFilter: string;
     prestadoDebtorFilters: string[];
+    includeFacetOptions?: boolean;
     preserveSelection?: boolean;
   }) => {
     const requestId = inventoryPageRequestIdRef.current + 1;
@@ -967,6 +968,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       if (options.piezaFilter.trim().length) {
         params.set("piezaFilter", options.piezaFilter.trim());
       }
+      if (options.includeFacetOptions) {
+        params.set("includeFacetOptions", "1");
+      }
       options.prestadoDebtorFilters
         .map((value) => value.trim())
         .filter((value) => value.length)
@@ -992,13 +996,16 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       const nextTotal = typeof data.total === "number" && data.total >= 0 ? data.total : incomingWithLocal.length;
       const nextStatusTotals = normalizeStatusTotals(data.statusTotals);
       const nextPrestadoMetrics = normalizePrestadoMetrics(data.prestadoMetrics);
-      const nextFacetOptions = normalizeFacetOptions(data.facetOptions);
+      const shouldUpdateFacetOptions = Object.prototype.hasOwnProperty.call(data, "facetOptions");
+      const nextFacetOptions = shouldUpdateFacetOptions ? normalizeFacetOptions(data.facetOptions) : null;
 
       setItems(incomingWithLocal);
       setTotalItems(nextTotal);
       setStatusTotals(nextStatusTotals);
       setPrestadoMetrics(nextPrestadoMetrics);
-      setServerFacetOptions(nextFacetOptions);
+      if (nextFacetOptions) {
+        setServerFacetOptions(nextFacetOptions);
+      }
 
       if (!options.preserveSelection) {
         setSelectedIds([]);
@@ -3034,6 +3041,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       cocheFilter: normalizedInventoryCocheFilter,
       piezaFilter: normalizedInventoryPiezaFilter,
       prestadoDebtorFilters: normalizedStatusFilter === "PRESTADO" ? normalizedPrestadoDebtorFilters : [],
+      includeFacetOptions: inventoryPage === 1,
       preserveSelection: false
     });
   }, [

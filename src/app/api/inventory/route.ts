@@ -115,6 +115,12 @@ const parsePrestadoDebtorFilters = (searchParams: URLSearchParams) => {
   return Array.from(new Set(values));
 };
 
+const parseIncludeFacetOptions = (searchParams: URLSearchParams) => {
+  const raw = (searchParams.get("includeFacetOptions") ?? "").trim().toLowerCase();
+  if (!raw.length) return true;
+  return raw === "1" || raw === "true" || raw === "yes";
+};
+
 const buildStatusFilterSql = (statusFilter: string | null) => {
   if (!statusFilter) return Prisma.empty;
   return Prisma.sql`
@@ -488,6 +494,7 @@ export async function GET(req: Request) {
     const cocheFilter = parseFacetFilter(searchParams, "cocheFilter");
     const piezaFilter = parseFacetFilter(searchParams, "piezaFilter");
     const prestadoDebtorFilters = parsePrestadoDebtorFilters(searchParams);
+    const includeFacetOptions = parseIncludeFacetOptions(searchParams);
 
     const ownerSql = ownerId ? Prisma.sql`AND "ownerId" = ${ownerId}` : Prisma.empty;
     const statusSql = buildStatusFilterSql(statusFilter);
@@ -538,16 +545,18 @@ export async function GET(req: Request) {
         shouldLoadPrestadoMetrics
           ? getPrestadoMetrics({ ownerSql, statusSql, searchSql, marcaSql, cocheSql, piezaSql, prestadoDebtorSql })
           : Promise.resolve<PrestadoMetrics | null>(null),
-        getInventoryFacetOptions({
-          ownerSql,
-          statusSql,
-          searchSql,
-          marcaSql,
-          cocheSql,
-          piezaSql,
-          prestadoDebtorSql,
-          statusFilter
-        })
+        includeFacetOptions
+          ? getInventoryFacetOptions({
+              ownerSql,
+              statusSql,
+              searchSql,
+              marcaSql,
+              cocheSql,
+              piezaSql,
+              prestadoDebtorSql,
+              statusFilter
+            })
+          : Promise.resolve<InventoryFacetOptions | null>(null)
       ]);
 
       const hasMoreFastRows = fastCodeSearchMode && idRows.length > pageSize;
@@ -574,7 +583,7 @@ export async function GET(req: Request) {
         totalPages,
         statusTotals,
         prestadoMetrics,
-        facetOptions,
+        facetOptions: includeFacetOptions ? facetOptions : undefined,
         items: serialized
       });
     }
@@ -588,16 +597,18 @@ export async function GET(req: Request) {
       }),
       prisma.inventoryItem.count({ where }),
       getStatusTotals(ownerId),
-      getInventoryFacetOptions({
-        ownerSql,
-        statusSql,
-        searchSql,
-        marcaSql,
-        cocheSql,
-        piezaSql,
-        prestadoDebtorSql,
-        statusFilter
-      })
+      includeFacetOptions
+        ? getInventoryFacetOptions({
+            ownerSql,
+            statusSql,
+            searchSql,
+            marcaSql,
+            cocheSql,
+            piezaSql,
+            prestadoDebtorSql,
+            statusFilter
+          })
+        : Promise.resolve<InventoryFacetOptions | null>(null)
     ]);
 
     const serialized = items.map((item) => serializeInventoryItem(item));
@@ -609,7 +620,7 @@ export async function GET(req: Request) {
       total,
       totalPages,
       statusTotals,
-      facetOptions,
+      facetOptions: includeFacetOptions ? facetOptions : undefined,
       items: serialized
     });
   } catch (err: any) {
