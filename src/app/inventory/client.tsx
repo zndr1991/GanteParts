@@ -2989,6 +2989,67 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     return parts.length ? parts.join(" ") : item.title || "-";
   }, []);
 
+  const normalizedManualPieceCandidates = useMemo(() => {
+    const unique = new Set<string>();
+
+    manualNomenclatureGroups.forEach((group) => {
+      group.pieces.forEach((entry) => {
+        const normalized = normalizeManualNomenclaturePiece((entry.piece ?? "").toString());
+        if (normalized.length) {
+          unique.add(normalized);
+        }
+      });
+    });
+
+    return Array.from(unique).sort((a, b) => b.length - a.length);
+  }, [manualNomenclatureGroups]);
+
+  const getItemShortPieceName = useCallback(
+    (item: Item) => {
+      const extra = item.extraData ?? {};
+      const rawPiece = normalizeManualNomenclaturePiece((extra.pieza ?? "").toString());
+      const rawTitle = normalizeManualNomenclaturePiece((item.title ?? "").toString());
+      const source = rawPiece || rawTitle;
+
+      if (!source.length) return "-";
+
+      for (const candidate of normalizedManualPieceCandidates) {
+        if (source === candidate || source.startsWith(`${candidate} `)) {
+          return candidate;
+        }
+      }
+
+      const markerCandidates = [
+        normalizeManualNomenclaturePiece((extra.marca ?? "").toString()),
+        normalizeManualNomenclaturePiece((extra.coche ?? "").toString()),
+        normalizeManualNomenclaturePiece((item.skuInternal ?? "").toString())
+      ].filter((value) => value.length);
+
+      let cutIndex = -1;
+      markerCandidates.forEach((marker) => {
+        const index = source.indexOf(marker);
+        if (index > 0 && (cutIndex === -1 || index < cutIndex)) {
+          cutIndex = index;
+        }
+      });
+
+      const yearMatch = source.match(/\b(?:19|20)\d{2}(?:\s*[-/]\s*(?:19|20)\d{2})?\b/);
+      if (
+        typeof yearMatch?.index === "number" &&
+        yearMatch.index > 0 &&
+        (cutIndex === -1 || yearMatch.index < cutIndex)
+      ) {
+        cutIndex = yearMatch.index;
+      }
+
+      const sliced = cutIndex > 0 ? source.slice(0, cutIndex).trim() : source;
+      const sanitized = sliced.replace(/[\s\-\/.,]+$/g, "").trim();
+
+      return sanitized.length ? sanitized : source;
+    },
+    [normalizedManualPieceCandidates]
+  );
+
   const toggleSort = useCallback((key: SortKey) => {
     setSortConfig((current) => {
       if (!current || current.key !== key) {
@@ -5239,6 +5300,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 const internalStatus = internalStatusRaw.length ? internalStatusRaw.toUpperCase() : "SIN ESTATUS";
                 const yearLabel = getItemYearLabel(item);
                 const pieceName = getItemPieceName(item);
+                const pieceShortName = getItemShortPieceName(item);
                 const isSelected = selectedIdSet.has(item.id);
                 const cardStatusClass = internalStatus === "VENDIDO"
                   ? "bg-rose-950/40"
@@ -5303,7 +5365,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                       <div className="mt-3 overflow-hidden rounded-xl border border-slate-700/80 bg-slate-950/45 text-sm">
                         <div className="flex items-center justify-between border-b border-slate-700/70 px-3 py-2">
                           <span className="text-[11px] uppercase tracking-wide text-slate-400">PIEZA</span>
-                          <span className="font-medium text-slate-100">{pieceName}</span>
+                          <span className="font-medium text-slate-100">{pieceShortName}</span>
                         </div>
                         <div className="flex items-center justify-between border-b border-slate-700/70 px-3 py-2">
                           <span className="text-[11px] uppercase tracking-wide text-slate-400">MARCA</span>
