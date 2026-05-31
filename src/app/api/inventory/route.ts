@@ -90,6 +90,8 @@ const parseSearchFilter = (searchParams: URLSearchParams) => {
   return raw;
 };
 
+const normalizeSearchToken = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
+
 const parseFacetFilter = (searchParams: URLSearchParams, key: "marcaFilter" | "cocheFilter" | "piezaFilter") => {
   const raw = (searchParams.get(key) ?? "").trim();
   if (!raw.length) return null;
@@ -106,6 +108,8 @@ const buildStatusFilterSql = (statusFilter: string | null) => {
 const buildSearchFilterSql = (searchFilter: string | null) => {
   if (!searchFilter) return Prisma.empty;
   const likeValue = `%${searchFilter}%`;
+  const normalizedToken = normalizeSearchToken(searchFilter);
+  const normalizedLikeValue = `%${normalizedToken}%`;
   return Prisma.sql`
     AND (
       COALESCE("skuInternal", '') ILIKE ${likeValue}
@@ -129,6 +133,14 @@ const buildSearchFilterSql = (searchFilter: string | null) => {
       OR COALESCE("extraData"->>'fecha_prestamo_pago', '') ILIKE ${likeValue}
       OR CAST(COALESCE("stock", 0) AS TEXT) ILIKE ${likeValue}
       OR CAST(COALESCE("price", 0) AS TEXT) ILIKE ${likeValue}
+      ${normalizedToken.length
+        ? Prisma.sql`
+            OR REPLACE(REPLACE(REPLACE(COALESCE(LOWER("skuInternal"), ''), '-', ''), ' ', ''), '_', '') LIKE ${normalizedLikeValue}
+            OR REPLACE(REPLACE(REPLACE(COALESCE(LOWER("mlItemId"), ''), '-', ''), ' ', ''), '_', '') LIKE ${normalizedLikeValue}
+            OR REPLACE(REPLACE(REPLACE(COALESCE(LOWER("sellerCustomField"), ''), '-', ''), ' ', ''), '_', '') LIKE ${normalizedLikeValue}
+            OR REPLACE(REPLACE(REPLACE(COALESCE(LOWER("title"), ''), '-', ''), ' ', ''), '_', '') LIKE ${normalizedLikeValue}
+          `
+        : Prisma.empty}
     )
   `;
 };
@@ -217,32 +229,34 @@ export async function GET(req: Request) {
       const cocheSql = buildCocheFilterSql(cocheFilter);
       const piezaSql = buildPiezaFilterSql(piezaFilter);
 
-      const idRows = await prisma.$queryRaw<InventoryIdRow[]>(Prisma.sql`
-        SELECT "id"
-        FROM "InventoryItem"
-        WHERE 1=1
-        ${ownerSql}
-        ${statusSql}
-        ${searchSql}
-        ${marcaSql}
-        ${cocheSql}
-        ${piezaSql}
-        ORDER BY "updatedAt" DESC
-        OFFSET ${skip}
-        LIMIT ${pageSize}
-      `);
-      const countRows = await prisma.$queryRaw<CountRow[]>(Prisma.sql`
-        SELECT COUNT(*) AS count
-        FROM "InventoryItem"
-        WHERE 1=1
-        ${ownerSql}
-        ${statusSql}
-        ${searchSql}
-        ${marcaSql}
-        ${cocheSql}
-        ${piezaSql}
-      `);
-      const statusTotals = await getStatusTotals(ownerId);
+      const [idRows, countRows, statusTotals] = await Promise.all([
+        prisma.$queryRaw<InventoryIdRow[]>(Prisma.sql`
+          SELECT "id"
+          FROM "InventoryItem"
+          WHERE 1=1
+          ${ownerSql}
+          ${statusSql}
+          ${searchSql}
+          ${marcaSql}
+          ${cocheSql}
+          ${piezaSql}
+          ORDER BY "updatedAt" DESC
+          OFFSET ${skip}
+          LIMIT ${pageSize}
+        `),
+        prisma.$queryRaw<CountRow[]>(Prisma.sql`
+          SELECT COUNT(*) AS count
+          FROM "InventoryItem"
+          WHERE 1=1
+          ${ownerSql}
+          ${statusSql}
+          ${searchSql}
+          ${marcaSql}
+          ${cocheSql}
+          ${piezaSql}
+        `),
+        getStatusTotals(ownerId)
+      ]);
 
       const ids = idRows.map((row) => row.id);
       const items = ids.length
@@ -266,14 +280,16 @@ export async function GET(req: Request) {
       });
     }
 
-    const items = await prisma.inventoryItem.findMany({
-      where,
-      orderBy: { updatedAt: "desc" },
-      skip,
-      take: pageSize
-    });
-    const total = await prisma.inventoryItem.count({ where });
-    const statusTotals = await getStatusTotals(ownerId);
+    const [items, total, statusTotals] = await Promise.all([
+      prisma.inventoryItem.findMany({
+        where,
+        orderBy: { updatedAt: "desc" },
+        skip,
+        take: pageSize
+      }),
+      prisma.inventoryItem.count({ where }),
+      getStatusTotals(ownerId)
+    ]);
 
     const serialized = items.map((item) => serializeInventoryItem(item));
     const totalPages = Math.max(1, Math.ceil(total / pageSize));

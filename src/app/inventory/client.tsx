@@ -170,6 +170,7 @@ const TABLE_OVERSCAN_ROWS = 8;
 const INVENTORY_TABLE_COLUMN_COUNT = 27;
 const WORKER_SEARCH_MIN_ITEMS = 250;
 const INVENTORY_PAGE_BLOCK_SIZE = 40;
+const SERVER_SEARCH_DEBOUNCE_MS = 320;
 
 const makePhotoKey = (file: File) => `${file.name}-${file.size}-${file.lastModified}`;
 
@@ -548,6 +549,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const searchWorkerRef = useRef<Worker | null>(null);
   const workerSearchRequestIdRef = useRef(0);
   const inventoryPageRequestIdRef = useRef(0);
+  const inventoryRequestAbortRef = useRef<AbortController | null>(null);
   const isMountedRef = useRef(true);
   const desktopTableContainerRef = useRef<HTMLDivElement | null>(null);
   const localEstatusInternoRef = useRef(
@@ -563,6 +565,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [loadingPage, setLoadingPage] = useState(false);
   const [inventoryPage, setInventoryPage] = useState(1);
   const [inventoryReloadSeq, setInventoryReloadSeq] = useState(0);
+  const [debouncedServerSearchTerm, setDebouncedServerSearchTerm] = useState("");
   const [tableScrollRowStart, setTableScrollRowStart] = useState(0);
   const [sectionVisibility, setSectionVisibility] = useState<Record<SectionKey, boolean>>({
     notifications: false,
@@ -759,6 +762,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       if (toastTimeoutRef.current) {
         clearTimeout(toastTimeoutRef.current);
       }
+      if (inventoryRequestAbortRef.current) {
+        inventoryRequestAbortRef.current.abort();
+        inventoryRequestAbortRef.current = null;
+      }
     };
   }, []);
 
@@ -840,6 +847,11 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   }) => {
     const requestId = inventoryPageRequestIdRef.current + 1;
     inventoryPageRequestIdRef.current = requestId;
+    const requestController = new AbortController();
+    if (inventoryRequestAbortRef.current) {
+      inventoryRequestAbortRef.current.abort();
+    }
+    inventoryRequestAbortRef.current = requestController;
     setMessage(null);
     setLoadingPage(true);
 
@@ -867,7 +879,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         params.set("piezaFilter", options.piezaFilter.trim());
       }
 
-      const res = await fetch(`/api/inventory?${params.toString()}`, { cache: "no-store" });
+      const res = await fetch(`/api/inventory?${params.toString()}`, {
+        cache: "no-store",
+        signal: requestController.signal
+      });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(data.error || "No se pudo obtener inventario");
@@ -893,11 +908,17 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
       return true;
     } catch (err: any) {
+      if (err?.name === "AbortError") {
+        return false;
+      }
       if (inventoryPageRequestIdRef.current === requestId) {
         setMessage(err?.message || "No se pudo obtener inventario");
       }
       return false;
     } finally {
+      if (inventoryRequestAbortRef.current === requestController) {
+        inventoryRequestAbortRef.current = null;
+      }
       if (inventoryPageRequestIdRef.current === requestId) {
         setLoadingPage(false);
       }
@@ -2740,6 +2761,19 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const canUseWorkerSearch = !useServerPagination && items.length >= WORKER_SEARCH_MIN_ITEMS;
 
   useEffect(() => {
+    if (!useServerPagination) {
+      setDebouncedServerSearchTerm(serverSearchTerm);
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      setDebouncedServerSearchTerm(serverSearchTerm);
+    }, SERVER_SEARCH_DEBOUNCE_MS);
+
+    return () => clearTimeout(timeout);
+  }, [serverSearchTerm, useServerPagination]);
+
+  useEffect(() => {
     const worker = searchWorkerRef.current;
     if (!worker || !canUseWorkerSearch) {
       setWorkerSearchResult(null);
@@ -2815,7 +2849,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
     void fetchInventoryPage({
       page: inventoryPage,
-      search: serverSearchTerm,
+      search: debouncedServerSearchTerm,
       statusFilter: normalizedStatusFilter,
       marcaFilter: normalizedInventoryMarcaFilter,
       cocheFilter: normalizedInventoryCocheFilter,
@@ -2830,7 +2864,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     normalizedInventoryMarcaFilter,
     normalizedInventoryPiezaFilter,
     normalizedStatusFilter,
-    serverSearchTerm,
+    debouncedServerSearchTerm,
     useServerPagination
   ]);
 
