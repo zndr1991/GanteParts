@@ -132,6 +132,7 @@ const buildSearchFilterSql = (searchFilter: string | null) => {
   if (!searchFilter) return Prisma.empty;
   const normalizedToken = normalizeSearchToken(searchFilter);
   const likeValue = `%${searchFilter}%`;
+  const normalizedLikeValue = normalizedToken.length >= 3 ? `%${normalizedToken}%` : null;
 
   if (isLikelyCodeSearch(searchFilter, normalizedToken)) {
     const normalizedPrefixValue = `${normalizedToken}%`;
@@ -143,6 +144,14 @@ const buildSearchFilterSql = (searchFilter: string | null) => {
       )
     `;
   }
+
+  const normalizedCodeSql = normalizedLikeValue
+    ? Prisma.sql`
+        OR replace(replace(replace(lower(coalesce("skuInternal", '')), '-', ''), ' ', ''), '_', '') LIKE ${normalizedLikeValue}
+        OR replace(replace(replace(lower(coalesce("mlItemId", '')), '-', ''), ' ', ''), '_', '') LIKE ${normalizedLikeValue}
+        OR replace(replace(replace(lower(coalesce("sellerCustomField", '')), '-', ''), ' ', ''), '_', '') LIKE ${normalizedLikeValue}
+      `
+    : Prisma.empty;
 
   return Prisma.sql`
     AND (
@@ -167,6 +176,7 @@ const buildSearchFilterSql = (searchFilter: string | null) => {
       OR COALESCE("extraData"->>'fecha_prestamo_pago', '') ILIKE ${likeValue}
       OR CAST(COALESCE("stock", 0) AS TEXT) ILIKE ${likeValue}
       OR CAST(COALESCE("price", 0) AS TEXT) ILIKE ${likeValue}
+      ${normalizedCodeSql}
     )
   `;
 };

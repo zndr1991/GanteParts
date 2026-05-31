@@ -211,7 +211,7 @@ const TABLE_OVERSCAN_ROWS = 8;
 const INVENTORY_TABLE_COLUMN_COUNT = 27;
 const WORKER_SEARCH_MIN_ITEMS = 250;
 const INVENTORY_PAGE_BLOCK_SIZE = 40;
-const SERVER_SEARCH_DEBOUNCE_MS = 120;
+const SERVER_SEARCH_DEBOUNCE_MS = 90;
 const INVENTORY_PAGE_CACHE_TTL_MS = 25_000;
 const INVENTORY_LOADING_INDICATOR_DELAY_MS = 180;
 const MANUAL_SKU_NUMBER_PADDING = 5;
@@ -751,6 +751,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [workerSearchResult, setWorkerSearchResult] = useState<{ query: string; ids: string[] } | null>(null);
   const [workerSearching, setWorkerSearching] = useState(false);
   const [loadingPage, setLoadingPage] = useState(false);
+  const [inventoryRefreshing, setInventoryRefreshing] = useState(false);
   const [inventoryPage, setInventoryPage] = useState(1);
   const [inventoryReloadSeq, setInventoryReloadSeq] = useState(0);
   const [debouncedServerSearchTerm, setDebouncedServerSearchTerm] = useState("");
@@ -1057,6 +1058,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
     setMessage(null);
     setLoadingPage(false);
+    setInventoryRefreshing(false);
 
     const includeFacetOptions = Boolean(options.includeFacetOptions);
     const cacheKey = buildInventoryPageCacheKey({
@@ -1088,17 +1090,31 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       }
 
       setLoadingPage(false);
+      setInventoryRefreshing(false);
       return true;
     }
     if (cached) {
       inventoryPageCacheRef.current.delete(cacheKey);
     }
 
-    loadingPageTimeoutRef.current = setTimeout(() => {
-      if (!isMountedRef.current) return;
-      if (inventoryPageRequestIdRef.current !== requestId) return;
-      setLoadingPage(true);
-    }, INVENTORY_LOADING_INDICATOR_DELAY_MS);
+    const hasInteractiveFilters =
+      options.search.trim().length > 0 ||
+      Boolean(options.statusFilter) ||
+      options.marcaFilter.trim().length > 0 ||
+      options.cocheFilter.trim().length > 0 ||
+      options.piezaFilter.trim().length > 0 ||
+      options.prestadoDebtorFilters.length > 0;
+    const shouldShowBlockingLoader = !hasInteractiveFilters && options.page === 1;
+
+    if (shouldShowBlockingLoader) {
+      loadingPageTimeoutRef.current = setTimeout(() => {
+        if (!isMountedRef.current) return;
+        if (inventoryPageRequestIdRef.current !== requestId) return;
+        setLoadingPage(true);
+      }, INVENTORY_LOADING_INDICATOR_DELAY_MS);
+    }
+
+    setInventoryRefreshing(true);
 
     const requestController = new AbortController();
     inventoryRequestAbortRef.current = requestController;
@@ -1217,6 +1233,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           loadingPageTimeoutRef.current = null;
         }
         setLoadingPage(false);
+        setInventoryRefreshing(false);
       }
     }
   }, [mergeIncomingWithLocalOverrides]);
@@ -3612,6 +3629,31 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     () => new Set(normalizedPrestadoDebtorFilters),
     [normalizedPrestadoDebtorFilters]
   );
+  const hasActiveInventorySearch = normalizedSearch.length > 0;
+  const hasActiveInventoryFacets =
+    normalizedInventoryMarcaFilter.length > 0 ||
+    normalizedInventoryCocheFilter.length > 0 ||
+    normalizedInventoryPiezaFilter.length > 0 ||
+    normalizedPrestadoDebtorFilters.length > 0;
+  const hasAnyInventoryFiltersActive =
+    hasActiveInventorySearch || Boolean(normalizedStatusFilter) || hasActiveInventoryFacets;
+  const activeInventoryFilterCount =
+    Number(hasActiveInventorySearch) +
+    Number(Boolean(normalizedStatusFilter)) +
+    Number(normalizedInventoryMarcaFilter.length > 0) +
+    Number(normalizedInventoryCocheFilter.length > 0) +
+    Number(normalizedInventoryPiezaFilter.length > 0) +
+    Number(normalizedPrestadoDebtorFilters.length > 0);
+
+  const clearInventoryFilters = useCallback(() => {
+    setSearch("");
+    setStatusFilter(null);
+    setInventoryMarcaFilter("");
+    setInventoryCocheFilter("");
+    setInventoryPiezaFilter("");
+    setPrestadoDebtorFilters([]);
+    setInventoryPage(1);
+  }, []);
 
   useEffect(() => {
     if (normalizedStatusFilter === "PRESTADO") return;
@@ -4994,113 +5036,191 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         </section>
 
         <section className="bg-slate-800/80 border border-slate-700 rounded-2xl p-4 shadow space-y-3">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="space-y-1">
-              <h2 className="text-lg font-semibold">Inventario cargado</h2>
-              <p className="text-xs text-slate-400">Selecciona filas para borrar, busca por SKU, titulo o codigo de Mercado Libre.</p>
+          <div className="rounded-2xl border border-slate-700 bg-slate-900/55 p-3 sm:p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div className="space-y-1">
+                <h2 className="text-lg font-semibold">Inventario cargado</h2>
+                <p className="text-xs text-slate-400">
+                  Busca por SKU o texto libre y combina filtros para ubicar piezas mas rapido.
+                </p>
+                <p className="text-[11px] text-slate-500">Tip: puedes buscar SKU como CAL-00039 o CAL 00039.</p>
+              </div>
+              <div className="text-xs text-slate-400 lg:text-right">
+                <p>
+                  Mostrando {paginatedVisibleStart}-{paginatedVisibleEnd} de {useServerPagination ? totalItems : filteredItems.length}
+                </p>
+                {inventoryRefreshing && !loadingPage ? (
+                  <p className="mt-1 text-amber-300">Actualizando resultados...</p>
+                ) : (
+                  <p className="mt-1 text-slate-500">Filtros y busqueda en tiempo real</p>
+                )}
+              </div>
             </div>
-            <div className="flex w-full flex-col gap-2 sm:w-auto sm:items-end">
-              <div className="flex w-full flex-wrap items-center gap-2 sm:justify-end">
+
+            <div className={`mt-3 grid grid-cols-1 gap-2 ${normalizedStatusFilter === "PRESTADO" ? "xl:grid-cols-6" : "xl:grid-cols-5"}`}>
+              <div className="relative xl:col-span-2">
                 <input
                   type="search"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Buscar..."
-                  className="w-full sm:w-64 rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm focus:border-amber-400 focus:outline-none"
+                  placeholder="Buscar por SKU, titulo, codigo ML..."
+                  className="w-full rounded-xl bg-slate-900 border border-slate-700 px-3 py-2.5 pr-20 text-sm focus:border-amber-400 focus:outline-none"
                 />
-                <span className="text-xs text-slate-400">
-                  Mostrando {paginatedVisibleStart}-{paginatedVisibleEnd} de {useServerPagination ? totalItems : filteredItems.length}
-                </span>
-              </div>
-              <div className={`grid w-full grid-cols-1 gap-2 ${normalizedStatusFilter === "PRESTADO" ? "sm:grid-cols-5" : "sm:grid-cols-4"}`}>
-                <select
-                  value={inventoryMarcaFilter}
-                  onChange={(event) => setInventoryMarcaFilter(event.target.value)}
-                  className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
-                >
-                  <option value="">Marca (todas)</option>
-                  {inventoryMarcaOptions.map((marca) => (
-                    <option key={marca} value={marca}>
-                      {marca}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={inventoryCocheFilter}
-                  onChange={(event) => setInventoryCocheFilter(event.target.value)}
-                  className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
-                >
-                  <option value="">Coche (todos)</option>
-                  {inventoryCocheOptions.map((coche) => (
-                    <option key={coche} value={coche}>
-                      {coche}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={inventoryPiezaFilter}
-                  onChange={(event) => setInventoryPiezaFilter(event.target.value)}
-                  className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
-                >
-                  <option value="">Pieza (todas)</option>
-                  {inventoryPiezaOptions.map((pieza) => (
-                    <option key={pieza} value={pieza}>
-                      {pieza}
-                    </option>
-                  ))}
-                </select>
-                {normalizedStatusFilter === "PRESTADO" && (
-                  <div className="rounded-md border border-slate-700 bg-gradient-to-b from-slate-900 to-slate-950 px-3 py-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-[10px] uppercase tracking-wide text-slate-400">Me debe (uno o varios)</p>
-                      <span className="text-[10px] text-slate-500">
-                        {normalizedPrestadoDebtorFilters.length
-                          ? `${normalizedPrestadoDebtorFilters.length} seleccionados`
-                          : "Sin selección"}
-                      </span>
-                    </div>
-                    {visiblePrestadoDebtorOptions.length > 0 ? (
-                      <div className="mt-2 flex max-h-24 flex-wrap gap-1.5 overflow-y-auto pr-1">
-                        {visiblePrestadoDebtorOptions.map((debtor) => {
-                          const isActive = normalizedPrestadoDebtorFilterSet.has(debtor);
-                          return (
-                            <button
-                              key={debtor}
-                              type="button"
-                              onClick={() => togglePrestadoDebtorFilter(debtor)}
-                              className={`rounded-full border px-2 py-1 text-[11px] font-semibold transition ${
-                                isActive
-                                  ? "border-cyan-400/80 bg-cyan-500/20 text-cyan-100"
-                                  : "border-slate-600 bg-slate-900/70 text-slate-200 hover:border-cyan-400/60"
-                              }`}
-                            >
-                              {debtor}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <p className="mt-2 text-[11px] text-slate-500">
-                        No hay personas disponibles con los filtros actuales.
-                      </p>
-                    )}
-                  </div>
+                {search.trim().length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setSearch("")}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-slate-600 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-200 hover:border-amber-400"
+                  >
+                    Limpiar
+                  </button>
                 )}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setInventoryMarcaFilter("");
-                    setInventoryCocheFilter("");
-                    setInventoryPiezaFilter("");
-                    setPrestadoDebtorFilters([]);
-                  }}
-                  disabled={!inventoryMarcaFilter && !inventoryCocheFilter && !inventoryPiezaFilter && prestadoDebtorFilters.length === 0}
-                  className="rounded-md border border-slate-600 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-amber-400 disabled:opacity-50"
-                >
-                  Limpiar filtros
-                </button>
               </div>
+
+              <select
+                value={inventoryMarcaFilter}
+                onChange={(event) => setInventoryMarcaFilter(event.target.value)}
+                className="rounded-xl bg-slate-900 border border-slate-700 px-3 py-2.5 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
+              >
+                <option value="">Marca (todas)</option>
+                {inventoryMarcaOptions.map((marca) => (
+                  <option key={marca} value={marca}>
+                    {marca}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={inventoryCocheFilter}
+                onChange={(event) => setInventoryCocheFilter(event.target.value)}
+                className="rounded-xl bg-slate-900 border border-slate-700 px-3 py-2.5 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
+              >
+                <option value="">Coche (todos)</option>
+                {inventoryCocheOptions.map((coche) => (
+                  <option key={coche} value={coche}>
+                    {coche}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={inventoryPiezaFilter}
+                onChange={(event) => setInventoryPiezaFilter(event.target.value)}
+                className="rounded-xl bg-slate-900 border border-slate-700 px-3 py-2.5 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
+              >
+                <option value="">Pieza (todas)</option>
+                {inventoryPiezaOptions.map((pieza) => (
+                  <option key={pieza} value={pieza}>
+                    {pieza}
+                  </option>
+                ))}
+              </select>
+
+              <button
+                type="button"
+                onClick={clearInventoryFilters}
+                disabled={!hasAnyInventoryFiltersActive}
+                className="rounded-xl border border-slate-600 px-3 py-2.5 text-xs font-semibold text-slate-200 hover:border-amber-400 disabled:opacity-50"
+              >
+                Limpiar todo
+              </button>
+
+              {normalizedStatusFilter === "PRESTADO" && (
+                <div className="xl:col-span-6 rounded-xl border border-slate-700 bg-gradient-to-b from-slate-900 to-slate-950 px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[10px] uppercase tracking-wide text-slate-400">Me debe (uno o varios)</p>
+                    <span className="text-[10px] text-slate-500">
+                      {normalizedPrestadoDebtorFilters.length
+                        ? `${normalizedPrestadoDebtorFilters.length} seleccionados`
+                        : "Sin selección"}
+                    </span>
+                  </div>
+                  {visiblePrestadoDebtorOptions.length > 0 ? (
+                    <div className="mt-2 flex max-h-24 flex-wrap gap-1.5 overflow-y-auto pr-1">
+                      {visiblePrestadoDebtorOptions.map((debtor) => {
+                        const isActive = normalizedPrestadoDebtorFilterSet.has(debtor);
+                        return (
+                          <button
+                            key={debtor}
+                            type="button"
+                            onClick={() => togglePrestadoDebtorFilter(debtor)}
+                            className={`rounded-full border px-2 py-1 text-[11px] font-semibold transition ${
+                              isActive
+                                ? "border-cyan-400/80 bg-cyan-500/20 text-cyan-100"
+                                : "border-slate-600 bg-slate-900/70 text-slate-200 hover:border-cyan-400/60"
+                            }`}
+                          >
+                            {debtor}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-[11px] text-slate-500">No hay personas disponibles con los filtros actuales.</p>
+                  )}
+                </div>
+              )}
             </div>
+
+            {hasAnyInventoryFiltersActive && (
+              <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-slate-700 bg-slate-950/50 px-3 py-2 text-xs">
+                <span className="font-semibold text-amber-200">Filtros activos: {activeInventoryFilterCount}</span>
+                {hasActiveInventorySearch && (
+                  <button
+                    type="button"
+                    onClick={() => setSearch("")}
+                    className="rounded-full border border-slate-600 bg-slate-900/80 px-2 py-1 text-[11px] text-slate-200 hover:border-amber-300"
+                  >
+                    Buscar: {search.trim().slice(0, 28)}
+                  </button>
+                )}
+                {normalizedStatusFilter && (
+                  <button
+                    type="button"
+                    onClick={() => setStatusFilter(null)}
+                    className="rounded-full border border-slate-600 bg-slate-900/80 px-2 py-1 text-[11px] text-slate-200 hover:border-amber-300"
+                  >
+                    Estatus: {normalizedStatusFilter}
+                  </button>
+                )}
+                {normalizedInventoryMarcaFilter && (
+                  <button
+                    type="button"
+                    onClick={() => setInventoryMarcaFilter("")}
+                    className="rounded-full border border-slate-600 bg-slate-900/80 px-2 py-1 text-[11px] text-slate-200 hover:border-amber-300"
+                  >
+                    Marca: {normalizedInventoryMarcaFilter}
+                  </button>
+                )}
+                {normalizedInventoryCocheFilter && (
+                  <button
+                    type="button"
+                    onClick={() => setInventoryCocheFilter("")}
+                    className="rounded-full border border-slate-600 bg-slate-900/80 px-2 py-1 text-[11px] text-slate-200 hover:border-amber-300"
+                  >
+                    Coche: {normalizedInventoryCocheFilter}
+                  </button>
+                )}
+                {normalizedInventoryPiezaFilter && (
+                  <button
+                    type="button"
+                    onClick={() => setInventoryPiezaFilter("")}
+                    className="rounded-full border border-slate-600 bg-slate-900/80 px-2 py-1 text-[11px] text-slate-200 hover:border-amber-300"
+                  >
+                    Pieza: {normalizedInventoryPiezaFilter}
+                  </button>
+                )}
+                {normalizedPrestadoDebtorFilters.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setPrestadoDebtorFilters([])}
+                    className="rounded-full border border-slate-600 bg-slate-900/80 px-2 py-1 text-[11px] text-slate-200 hover:border-amber-300"
+                  >
+                    Me debe: {normalizedPrestadoDebtorFilters.length}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
           <div className="hidden rounded-2xl border border-slate-700 bg-slate-900/50 p-4">
             <div className="flex items-center justify-between gap-3">
@@ -5239,6 +5359,12 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
             </div>
           ) : (
             <>
+              {inventoryRefreshing && (
+                <div className="mt-2 flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/50 px-3 py-2 text-xs text-amber-200">
+                  <span className="h-2 w-2 animate-pulse rounded-full bg-amber-300" />
+                  Actualizando inventario sin bloquear la tabla...
+                </div>
+              )}
               {filteredItems.length > 0 && (
                 <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-700 bg-slate-900/60 p-3 text-xs text-slate-300">
                   <span>
