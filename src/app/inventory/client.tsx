@@ -4320,12 +4320,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                         }
                       }}
                     >
-                      <input
-                        className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
-                        placeholder="Codigo ML"
-                        value={form.mlItemId}
-                        onChange={(e) => setForm((f) => ({ ...f, mlItemId: e.target.value.toUpperCase() }))}
-                      />
                       <select
                         className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
                         value={form.estatusInterno}
