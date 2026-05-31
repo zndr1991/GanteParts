@@ -1970,7 +1970,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const updateEstatusInterno = useCallback(async (
     id: string,
     value: string,
-    overridePrestadoVendidoA?: string | null
+    overridePrestadoVendidoA?: string | null,
+    overridePrice?: number | null
   ) => {
     const normalized = value.trim().toUpperCase();
     const current = items.find((it) => it.id === id);
@@ -1998,6 +1999,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     const prestadoVendidoA = hasOverride
       ? overridePrestadoVendidoA ?? null
       : currentPrestadoVendidoA;
+    const hasPriceOverride = typeof overridePrice === "number" && Number.isFinite(overridePrice);
 
     localEstatusInternoRef.current.set(id, {
       value: normalized,
@@ -2017,6 +2019,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           ? {
               ...item,
               status: nextStatus ?? item.status,
+              price: hasPriceOverride ? overridePrice : item.price,
               extraData: {
                 ...(item.extraData ?? {}),
                 estatus_interno: normalized || undefined,
@@ -2040,7 +2043,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           status: nextStatus,
           forceMlSync: normalized === "ML",
           fechaPrestamoPago,
-          prestadoVendidoA
+          prestadoVendidoA,
+          price: hasPriceOverride ? overridePrice : undefined
         })
       });
       const data = await res.json().catch(() => ({}));
@@ -2056,7 +2060,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         financeResult = await registerSoldItemInFinance({
           piece,
           skuInternal: current.skuInternal,
-          defaultAmount: current.price,
+          defaultAmount: hasPriceOverride ? overridePrice : current.price,
           saleDate: fechaPrestamoPago
         });
       }
@@ -2424,6 +2428,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       const val = nextValue.toString().trim().toUpperCase();
       const currentBuyer = (item.extraData?.prestado_vendido_a ?? "").toString();
       let overrideBuyer: string | null | undefined = undefined;
+      let overridePrice: number | null | undefined = undefined;
 
       if (val === "VENDIDO" || val === "PRESTADO") {
         const question = val === "VENDIDO" ? "¿A quien se vendio?" : "¿A quien se presto?";
@@ -2439,13 +2444,38 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           return;
         }
         overrideBuyer = cleaned.toUpperCase();
+
+        const defaultAmountText =
+          item.price !== null &&
+          item.price !== undefined &&
+          Number.isFinite(item.price) &&
+          item.price > 0
+            ? String(item.price)
+            : "";
+        const amountQuestion =
+          val === "VENDIDO" ? "¿En cuánto se vendió la pieza?" : "¿En cuánto se prestó la pieza?";
+        const amountAnswer = window.prompt(
+          `${amountQuestion}\nEse costo también se guardará como precio.`,
+          defaultAmountText
+        );
+        if (amountAnswer === null) {
+          setMessage("Actualizacion cancelada");
+          return;
+        }
+
+        const parsedAmount = parsePositiveAmountInput(amountAnswer);
+        if (!parsedAmount) {
+          setMessage("Debes indicar un costo valido para prestar o vender");
+          return;
+        }
+        overridePrice = parsedAmount;
       }
 
       updateExtraDataInState(item.id, {
         estatus_interno: val || undefined,
         ...(overrideBuyer !== undefined ? { prestado_vendido_a: overrideBuyer || undefined } : {})
       });
-      updateEstatusInterno(item.id, val, overrideBuyer);
+      updateEstatusInterno(item.id, val, overrideBuyer, overridePrice);
     },
     [canEditInventory, updateEstatusInterno, updateExtraDataInState]
   );
@@ -2690,10 +2720,39 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     }
 
     const priceRaw = inventoryEditForm.price.replace(/[$,\s]/g, "").trim();
-    const priceValue = priceRaw.length ? Number(priceRaw) : null;
+    let priceValue = priceRaw.length ? Number(priceRaw) : null;
     if (priceValue !== null && (!Number.isFinite(priceValue) || priceValue < 0)) {
       setInventoryEditError("Precio invalido");
       return;
+    }
+
+    if (estatusInterno === "VENDIDO" || estatusInterno === "PRESTADO") {
+      const defaultAmountText =
+        priceValue !== null &&
+        priceValue !== undefined &&
+        Number.isFinite(priceValue) &&
+        priceValue > 0
+          ? String(priceValue)
+          : "";
+      const amountQuestion =
+        estatusInterno === "VENDIDO" ? "¿En cuánto se vendió la pieza?" : "¿En cuánto se prestó la pieza?";
+      const amountAnswer = window.prompt(
+        `${amountQuestion}\nEse costo también se guardará como precio.`,
+        defaultAmountText
+      );
+      if (amountAnswer === null) {
+        setInventoryEditError("Actualizacion cancelada");
+        return;
+      }
+
+      const parsedAmount = parsePositiveAmountInput(amountAnswer);
+      if (!parsedAmount) {
+        setInventoryEditError("Debes indicar un costo valido para prestar o vender");
+        return;
+      }
+
+      priceValue = parsedAmount;
+      setInventoryEditForm((current) => (current ? { ...current, price: String(parsedAmount) } : current));
     }
 
     const precioCompraRaw = inventoryEditForm.precioCompra.replace(/[$,\s]/g, "").trim();
