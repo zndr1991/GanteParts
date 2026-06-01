@@ -631,6 +631,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [items, setItems] = useState<Item[]>(initialPage.items);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [search, setSearch] = useState("");
+  const [searchDraft, setSearchDraft] = useState("");
   const [focusedRowInfo, setFocusedRowInfo] = useState<FocusedInfo | null>(null);
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [inventoryMarcaFilter, setInventoryMarcaFilter] = useState("");
@@ -3637,6 +3638,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     normalizedPrestadoDebtorFilters.length > 0;
   const hasAnyInventoryFiltersActive =
     hasActiveInventorySearch || Boolean(normalizedStatusFilter) || hasActiveInventoryFacets;
+  const hasPendingSearchDraftChanges = searchDraft.trim() !== search;
+  const canShowAllInventory = hasAnyInventoryFiltersActive || searchDraft.trim().length > 0;
   const activeInventoryFilterCount =
     Number(hasActiveInventorySearch) +
     Number(Boolean(normalizedStatusFilter)) +
@@ -3646,6 +3649,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     Number(normalizedPrestadoDebtorFilters.length > 0);
 
   const clearInventoryFilters = useCallback(() => {
+    setSearchDraft("");
     setSearch("");
     setStatusFilter(null);
     setInventoryMarcaFilter("");
@@ -3654,6 +3658,24 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     setPrestadoDebtorFilters([]);
     setInventoryPage(1);
   }, []);
+
+  const applyInventorySearch = useCallback(() => {
+    const nextSearch = searchDraft.trim();
+    if (nextSearch === search) return;
+    setSearch(nextSearch);
+    setInventoryPage(1);
+  }, [search, searchDraft]);
+
+  const clearAppliedInventorySearch = useCallback(() => {
+    if (!search.length && !searchDraft.length) return;
+    setSearch("");
+    setSearchDraft("");
+    setInventoryPage(1);
+  }, [search, searchDraft]);
+
+  useEffect(() => {
+    setSearchDraft(search);
+  }, [search]);
 
   useEffect(() => {
     if (normalizedStatusFilter === "PRESTADO") return;
@@ -5052,30 +5074,42 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 {inventoryRefreshing && !loadingPage ? (
                   <p className="mt-1 text-amber-300">Actualizando resultados...</p>
                 ) : (
-                  <p className="mt-1 text-slate-500">Filtros y busqueda en tiempo real</p>
+                  <p className="mt-1 text-slate-500">Escribe y pulsa Buscar para filtrar</p>
                 )}
               </div>
             </div>
 
-            <div className={`mt-3 grid grid-cols-1 gap-2 ${normalizedStatusFilter === "PRESTADO" ? "xl:grid-cols-6" : "xl:grid-cols-5"}`}>
-              <div className="relative xl:col-span-2">
+            <div className={`mt-3 grid grid-cols-1 gap-2 ${normalizedStatusFilter === "PRESTADO" ? "xl:grid-cols-5" : "xl:grid-cols-4"}`}>
+              <form
+                className="xl:col-span-2 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto_auto]"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  applyInventorySearch();
+                }}
+              >
                 <input
                   type="search"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  value={searchDraft}
+                  onChange={(e) => setSearchDraft(e.target.value)}
                   placeholder="Buscar por SKU, titulo, codigo ML..."
-                  className="w-full rounded-xl bg-slate-900 border border-slate-700 px-3 py-2.5 pr-20 text-sm focus:border-amber-400 focus:outline-none"
+                  className="w-full rounded-xl bg-slate-900 border border-slate-700 px-3 py-2.5 text-sm focus:border-amber-400 focus:outline-none"
                 />
-                {search.trim().length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setSearch("")}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-slate-600 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-200 hover:border-amber-400"
-                  >
-                    Limpiar
-                  </button>
-                )}
-              </div>
+                <button
+                  type="submit"
+                  disabled={!hasPendingSearchDraftChanges}
+                  className="rounded-xl border border-amber-400/70 bg-amber-500/15 px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-amber-100 hover:bg-amber-500/25 disabled:opacity-50"
+                >
+                  Buscar
+                </button>
+                <button
+                  type="button"
+                  onClick={clearInventoryFilters}
+                  disabled={!canShowAllInventory}
+                  className="rounded-xl border border-slate-600 px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-200 hover:border-amber-400 disabled:opacity-50"
+                >
+                  Mostrar todo
+                </button>
+              </form>
 
               <select
                 value={inventoryMarcaFilter}
@@ -5116,17 +5150,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 ))}
               </select>
 
-              <button
-                type="button"
-                onClick={clearInventoryFilters}
-                disabled={!hasAnyInventoryFiltersActive}
-                className="rounded-xl border border-slate-600 px-3 py-2.5 text-xs font-semibold text-slate-200 hover:border-amber-400 disabled:opacity-50"
-              >
-                Limpiar todo
-              </button>
-
               {normalizedStatusFilter === "PRESTADO" && (
-                <div className="xl:col-span-6 rounded-xl border border-slate-700 bg-gradient-to-b from-slate-900 to-slate-950 px-3 py-2">
+                <div className="xl:col-span-full rounded-xl border border-slate-700 bg-gradient-to-b from-slate-900 to-slate-950 px-3 py-2">
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-[10px] uppercase tracking-wide text-slate-400">Me debe (uno o varios)</p>
                     <span className="text-[10px] text-slate-500">
@@ -5168,7 +5193,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 {hasActiveInventorySearch && (
                   <button
                     type="button"
-                    onClick={() => setSearch("")}
+                    onClick={clearAppliedInventorySearch}
                     className="rounded-full border border-slate-600 bg-slate-900/80 px-2 py-1 text-[11px] text-slate-200 hover:border-amber-300"
                   >
                     Buscar: {search.trim().slice(0, 28)}
