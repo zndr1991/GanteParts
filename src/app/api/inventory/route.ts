@@ -121,6 +121,41 @@ const parseIncludeFacetOptions = (searchParams: URLSearchParams) => {
   return raw === "1" || raw === "true" || raw === "yes";
 };
 
+const parseIncludeMeta = (searchParams: URLSearchParams) => {
+  const raw = (searchParams.get("includeMeta") ?? "").trim().toLowerCase();
+  if (!raw.length) return true;
+  return raw === "1" || raw === "true" || raw === "yes";
+};
+
+const SEARCH_DOCUMENT_SQL = Prisma.sql`
+  lower(
+    concat_ws(
+      ' ',
+      COALESCE("skuInternal", ''),
+      COALESCE("title", ''),
+      COALESCE("mlItemId", ''),
+      COALESCE("sellerCustomField", ''),
+      COALESCE("extraData"->>'descripcion_local', ''),
+      COALESCE("extraData"->>'descripcion_ml', ''),
+      COALESCE("extraData"->>'estatus_interno', ''),
+      COALESCE("extraData"->>'origen', ''),
+      COALESCE("extraData"->>'coche', ''),
+      COALESCE("extraData"->>'pieza', ''),
+      COALESCE("extraData"->>'marca', ''),
+      COALESCE("extraData"->>'ano_desde', ''),
+      COALESCE("extraData"->>'ano_hasta', ''),
+      COALESCE("extraData"->>'ubicacion', ''),
+      COALESCE("extraData"->>'inventario', ''),
+      COALESCE("extraData"->>'revision', ''),
+      COALESCE("extraData"->>'facebook', ''),
+      COALESCE("extraData"->>'prestado_vendido_a', ''),
+      COALESCE("extraData"->>'fecha_prestamo_pago', ''),
+      CAST(COALESCE("stock", 0) AS TEXT),
+      CAST(COALESCE("price", 0) AS TEXT)
+    )
+  )
+`;
+
 const buildStatusFilterSql = (statusFilter: string | null) => {
   if (!statusFilter) return Prisma.empty;
   return Prisma.sql`
@@ -131,7 +166,7 @@ const buildStatusFilterSql = (statusFilter: string | null) => {
 const buildSearchFilterSql = (searchFilter: string | null) => {
   if (!searchFilter) return Prisma.empty;
   const normalizedToken = normalizeSearchToken(searchFilter);
-  const likeValue = `%${searchFilter}%`;
+  const lowerLikeValue = `%${searchFilter.toLowerCase()}%`;
   const normalizedLikeValue = normalizedToken.length >= 3 ? `%${normalizedToken}%` : null;
 
   if (isLikelyCodeSearch(searchFilter, normalizedToken)) {
@@ -155,27 +190,7 @@ const buildSearchFilterSql = (searchFilter: string | null) => {
 
   return Prisma.sql`
     AND (
-      COALESCE("skuInternal", '') ILIKE ${likeValue}
-      OR COALESCE("title", '') ILIKE ${likeValue}
-      OR COALESCE("mlItemId", '') ILIKE ${likeValue}
-      OR COALESCE("sellerCustomField", '') ILIKE ${likeValue}
-      OR COALESCE("extraData"->>'descripcion_local', '') ILIKE ${likeValue}
-      OR COALESCE("extraData"->>'descripcion_ml', '') ILIKE ${likeValue}
-      OR COALESCE("extraData"->>'estatus_interno', '') ILIKE ${likeValue}
-      OR COALESCE("extraData"->>'origen', '') ILIKE ${likeValue}
-      OR COALESCE("extraData"->>'coche', '') ILIKE ${likeValue}
-      OR COALESCE("extraData"->>'pieza', '') ILIKE ${likeValue}
-      OR COALESCE("extraData"->>'marca', '') ILIKE ${likeValue}
-      OR COALESCE("extraData"->>'ano_desde', '') ILIKE ${likeValue}
-      OR COALESCE("extraData"->>'ano_hasta', '') ILIKE ${likeValue}
-      OR COALESCE("extraData"->>'ubicacion', '') ILIKE ${likeValue}
-      OR COALESCE("extraData"->>'inventario', '') ILIKE ${likeValue}
-      OR COALESCE("extraData"->>'revision', '') ILIKE ${likeValue}
-      OR COALESCE("extraData"->>'facebook', '') ILIKE ${likeValue}
-      OR COALESCE("extraData"->>'prestado_vendido_a', '') ILIKE ${likeValue}
-      OR COALESCE("extraData"->>'fecha_prestamo_pago', '') ILIKE ${likeValue}
-      OR CAST(COALESCE("stock", 0) AS TEXT) ILIKE ${likeValue}
-      OR CAST(COALESCE("price", 0) AS TEXT) ILIKE ${likeValue}
+      ${SEARCH_DOCUMENT_SQL} LIKE ${lowerLikeValue}
       ${normalizedCodeSql}
     )
   `;
@@ -505,6 +520,7 @@ export async function GET(req: Request) {
     const piezaFilter = parseFacetFilter(searchParams, "piezaFilter");
     const prestadoDebtorFilters = parsePrestadoDebtorFilters(searchParams);
     const includeFacetOptions = parseIncludeFacetOptions(searchParams);
+    const includeMeta = parseIncludeMeta(searchParams);
 
     const ownerSql = ownerId ? Prisma.sql`AND "ownerId" = ${ownerId}` : Prisma.empty;
     const statusSql = buildStatusFilterSql(statusFilter);
@@ -554,11 +570,13 @@ export async function GET(req: Request) {
               ${piezaSql}
               ${prestadoDebtorSql}
             `),
-        getStatusTotals(ownerId),
-        shouldLoadPrestadoMetrics
+        includeMeta
+          ? getStatusTotals(ownerId)
+          : Promise.resolve<Record<string, number> | null>(null),
+        includeMeta && shouldLoadPrestadoMetrics
           ? getPrestadoMetrics({ ownerSql, statusSql, searchSql, marcaSql, cocheSql, piezaSql, prestadoDebtorSql })
           : Promise.resolve<PrestadoMetrics | null>(null),
-        includeFacetOptions
+        includeMeta && includeFacetOptions
           ? getInventoryFacetOptions({
               ownerSql,
               statusSql,
@@ -594,9 +612,9 @@ export async function GET(req: Request) {
         pageSize,
         total,
         totalPages,
-        statusTotals,
-        prestadoMetrics,
-        facetOptions: includeFacetOptions ? facetOptions : undefined,
+        statusTotals: includeMeta ? statusTotals : undefined,
+        prestadoMetrics: includeMeta ? prestadoMetrics : undefined,
+        facetOptions: includeMeta && includeFacetOptions ? facetOptions : undefined,
         items: serialized
       });
     }
@@ -609,8 +627,10 @@ export async function GET(req: Request) {
         take: pageSize
       }),
       prisma.inventoryItem.count({ where }),
-      getStatusTotals(ownerId),
-      includeFacetOptions
+      includeMeta
+        ? getStatusTotals(ownerId)
+        : Promise.resolve<Record<string, number> | null>(null),
+      includeMeta && includeFacetOptions
         ? getInventoryFacetOptions({
             ownerSql,
             statusSql,
@@ -632,8 +652,8 @@ export async function GET(req: Request) {
       pageSize,
       total,
       totalPages,
-      statusTotals,
-      facetOptions: includeFacetOptions ? facetOptions : undefined,
+      statusTotals: includeMeta ? statusTotals : undefined,
+      facetOptions: includeMeta && includeFacetOptions ? facetOptions : undefined,
       items: serialized
     });
   } catch (err: any) {

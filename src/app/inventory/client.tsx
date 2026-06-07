@@ -88,6 +88,13 @@ type InventoryPageResponse = {
   } | null;
 };
 
+type InventoryAllResponse = {
+  items?: Item[];
+  total?: number;
+  statusTotals?: Record<string, number>;
+  truncated?: boolean;
+};
+
 type InventoryPageCachePayload = {
   items: Item[];
   total: number;
@@ -215,6 +222,7 @@ const SERVER_SEARCH_DEBOUNCE_MS = 90;
 const INVENTORY_PAGE_CACHE_TTL_MS = 25_000;
 const INVENTORY_LOADING_INDICATOR_DELAY_MS = 180;
 const MANUAL_SKU_NUMBER_PADDING = 5;
+const HYBRID_LOCAL_SEARCH_MAX_ITEMS = 3200;
 
 const makePhotoKey = (file: File) => `${file.name}-${file.size}-${file.lastModified}`;
 
@@ -502,6 +510,7 @@ const buildInventoryPageCacheKey = (options: {
   piezaFilter: string;
   prestadoDebtorFilters: string[];
   includeFacetOptions: boolean;
+  includeMeta: boolean;
 }) => {
   const normalizedDebtors = Array.from(
     new Set(
@@ -519,7 +528,8 @@ const buildInventoryPageCacheKey = (options: {
     cocheFilter: options.cocheFilter.trim().toUpperCase(),
     piezaFilter: options.piezaFilter.trim().toUpperCase(),
     prestadoDebtorFilters: normalizedDebtors,
-    includeFacetOptions: options.includeFacetOptions
+    includeFacetOptions: options.includeFacetOptions,
+    includeMeta: options.includeMeta
   });
 };
 
@@ -724,6 +734,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const workerSearchRequestIdRef = useRef(0);
   const inventoryPageRequestIdRef = useRef(0);
   const inventoryRequestAbortRef = useRef<AbortController | null>(null);
+  const hybridLoadAbortRef = useRef<AbortController | null>(null);
+  const hybridAutoAttemptedRef = useRef(false);
   const loadingPageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastServerFilterRequestSignatureRef = useRef<string | null>(null);
   const inventoryPageCacheRef = useRef<Map<string, { expiresAt: number; payload: InventoryPageCachePayload }>>(
@@ -742,7 +754,13 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [statusTotals, setStatusTotals] = useState<Record<string, number>>(
     normalizeStatusTotals(initialPage.statusTotals)
   );
+  const statusTotalsRef = useRef<Record<string, number>>(normalizeStatusTotals(initialPage.statusTotals));
   const [prestadoMetrics, setPrestadoMetrics] = useState<{
+    total: number;
+    debt: number;
+    profit: number;
+  } | null>(normalizePrestadoMetrics(initialPage.prestadoMetrics));
+  const prestadoMetricsRef = useRef<{
     total: number;
     debt: number;
     profit: number;
@@ -752,6 +770,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   );
   const [workerSearchResult, setWorkerSearchResult] = useState<{ query: string; ids: string[] } | null>(null);
   const [workerSearching, setWorkerSearching] = useState(false);
+  const [hybridLocalMode, setHybridLocalMode] = useState(false);
+  const [hybridLocalHydrating, setHybridLocalHydrating] = useState(false);
   const [loadingPage, setLoadingPage] = useState(false);
   const [inventoryRefreshing, setInventoryRefreshing] = useState(false);
   const [inventoryPage, setInventoryPage] = useState(1);
@@ -773,7 +793,19 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const canImportInventory = canEditInventory;
   const canManageMercadoLibre = canEditInventory;
   const thumbnailsActive = THUMBNAILS_ENABLED;
-  const useServerPagination = !isManualOnly;
+  const canAutoEnableHybridLocal =
+    !isManualOnly &&
+    initialPage.total > 0 &&
+    initialPage.total <= HYBRID_LOCAL_SEARCH_MAX_ITEMS;
+  const useServerPagination = !isManualOnly && !hybridLocalMode;
+
+  useEffect(() => {
+    statusTotalsRef.current = statusTotals;
+  }, [statusTotals]);
+
+  useEffect(() => {
+    prestadoMetricsRef.current = prestadoMetrics;
+  }, [prestadoMetrics]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -961,6 +993,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         inventoryRequestAbortRef.current.abort();
         inventoryRequestAbortRef.current = null;
       }
+      if (hybridLoadAbortRef.current) {
+        hybridLoadAbortRef.current.abort();
+        hybridLoadAbortRef.current = null;
+      }
       if (manualSkuRequestAbortRef.current) {
         manualSkuRequestAbortRef.current.abort();
         manualSkuRequestAbortRef.current = null;
@@ -1044,6 +1080,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     piezaFilter: string;
     prestadoDebtorFilters: string[];
     includeFacetOptions?: boolean;
+    includeMeta?: boolean;
     preserveSelection?: boolean;
   }) => {
     const requestId = inventoryPageRequestIdRef.current + 1;
@@ -1062,7 +1099,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     setLoadingPage(false);
     setInventoryRefreshing(false);
 
-    const includeFacetOptions = Boolean(options.includeFacetOptions);
+    const includeMeta = options.includeMeta !== false;
+    const includeFacetOptions = includeMeta && Boolean(options.includeFacetOptions);
     const cacheKey = buildInventoryPageCacheKey({
       page: options.page,
       search: options.search,
@@ -1071,7 +1109,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       cocheFilter: options.cocheFilter,
       piezaFilter: options.piezaFilter,
       prestadoDebtorFilters: options.prestadoDebtorFilters,
-      includeFacetOptions
+      includeFacetOptions,
+      includeMeta
     });
 
     const cached = inventoryPageCacheRef.current.get(cacheKey);
@@ -1147,6 +1186,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       if (includeFacetOptions) {
         params.set("includeFacetOptions", "1");
       }
+      if (!includeMeta) {
+        params.set("includeMeta", "0");
+      }
       options.prestadoDebtorFilters
         .map((value) => value.trim())
         .filter((value) => value.length)
@@ -1169,8 +1211,14 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
       const incoming: Item[] = Array.isArray(data.items) ? data.items : [];
       const nextTotal = typeof data.total === "number" && data.total >= 0 ? data.total : incoming.length;
-      const nextStatusTotals = normalizeStatusTotals(data.statusTotals);
-      const nextPrestadoMetrics = normalizePrestadoMetrics(data.prestadoMetrics);
+      const shouldUpdateStatusTotals = Object.prototype.hasOwnProperty.call(data, "statusTotals");
+      const nextStatusTotals = shouldUpdateStatusTotals
+        ? normalizeStatusTotals(data.statusTotals)
+        : statusTotalsRef.current;
+      const shouldUpdatePrestadoMetrics = Object.prototype.hasOwnProperty.call(data, "prestadoMetrics");
+      const nextPrestadoMetrics = shouldUpdatePrestadoMetrics
+        ? normalizePrestadoMetrics(data.prestadoMetrics)
+        : prestadoMetricsRef.current;
       const shouldUpdateFacetOptions = Object.prototype.hasOwnProperty.call(data, "facetOptions");
       const nextFacetOptions = shouldUpdateFacetOptions ? normalizeFacetOptions(data.facetOptions) : null;
 
@@ -1240,13 +1288,86 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     }
   }, [mergeIncomingWithLocalOverrides]);
 
+  const loadAllInventoryForHybrid = useCallback(async (options?: { force?: boolean }) => {
+    if (isManualOnly) return false;
+    if (!options?.force && !canAutoEnableHybridLocal) return false;
+
+    if (hybridLoadAbortRef.current) {
+      hybridLoadAbortRef.current.abort();
+      hybridLoadAbortRef.current = null;
+    }
+
+    const requestController = new AbortController();
+    hybridLoadAbortRef.current = requestController;
+    setHybridLocalHydrating(true);
+    setInventoryRefreshing(true);
+    setMessage(null);
+
+    try {
+      const res = await fetch("/api/inventory/all", {
+        cache: "no-store",
+        signal: requestController.signal
+      });
+      const data: InventoryAllResponse = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error || "No se pudo cargar inventario completo");
+      }
+
+      const incoming = Array.isArray(data.items) ? data.items : [];
+      const nextTotal = typeof data.total === "number" && data.total >= 0 ? data.total : incoming.length;
+      if (Boolean(data.truncated)) {
+        setHybridLocalMode(false);
+        return false;
+      }
+
+      const incomingWithLocal = mergeIncomingWithLocalOverrides(incoming);
+      setItems(incomingWithLocal);
+      setTotalItems(nextTotal);
+      if (Object.prototype.hasOwnProperty.call(data, "statusTotals")) {
+        setStatusTotals(normalizeStatusTotals(data.statusTotals));
+      }
+      setPrestadoMetrics(null);
+      setInventoryPage(1);
+      setSelectedIds([]);
+      setFocusedRowInfo(null);
+      setHybridLocalMode(true);
+      inventoryPageCacheRef.current.clear();
+      return true;
+    } catch (err: any) {
+      if (err?.name === "AbortError") {
+        return false;
+      }
+      setMessage(err?.message || "No se pudo activar busqueda local instantanea");
+      return false;
+    } finally {
+      if (hybridLoadAbortRef.current === requestController) {
+        hybridLoadAbortRef.current = null;
+      }
+      setHybridLocalHydrating(false);
+      setInventoryRefreshing(false);
+    }
+  }, [canAutoEnableHybridLocal, isManualOnly, mergeIncomingWithLocalOverrides]);
+
+  useEffect(() => {
+    if (!canAutoEnableHybridLocal) return;
+    if (hybridLocalMode) return;
+    if (hybridLocalHydrating) return;
+    if (hybridAutoAttemptedRef.current) return;
+    hybridAutoAttemptedRef.current = true;
+    void loadAllInventoryForHybrid();
+  }, [canAutoEnableHybridLocal, hybridLocalHydrating, hybridLocalMode, loadAllInventoryForHybrid]);
+
   const refresh = useCallback(async () => {
     if (isManualOnly) return;
     if (useServerPagination) {
       inventoryPageCacheRef.current.clear();
       setInventoryReloadSeq((current) => current + 1);
+      return;
     }
-  }, [isManualOnly, useServerPagination]);
+    if (hybridLocalMode) {
+      await loadAllInventoryForHybrid({ force: true });
+    }
+  }, [hybridLocalMode, isManualOnly, loadAllInventoryForHybrid, useServerPagination]);
 
   const deleteItems = useCallback(async (ids: string[], password?: string) => {
     if (!ids.length) return;
@@ -3686,6 +3807,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
   useEffect(() => {
     if (!useServerPagination) return;
+    if (hybridLocalHydrating) return;
 
     const requestFilterSignature = JSON.stringify({
       search: debouncedServerSearchTerm,
@@ -3702,13 +3824,26 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
     lastServerFilterRequestSignatureRef.current = requestFilterSignature;
 
-    const shouldIncludeFacetOptions =
+    const hasAnyFacetFilterActive =
+      normalizedInventoryMarcaFilter.length > 0 ||
+      normalizedInventoryCocheFilter.length > 0 ||
+      normalizedInventoryPiezaFilter.length > 0 ||
+      normalizedPrestadoDebtorFilters.length > 0;
+    const shouldIncludeMeta =
       inventoryPage === 1 &&
+      (
+        normalizedStatusFilter === "PRESTADO" ||
+        (
+          debouncedServerSearchTerm.length === 0 &&
+          !normalizedStatusFilter &&
+          !hasAnyFacetFilterActive
+        )
+      );
+    const shouldIncludeFacetOptions =
+      shouldIncludeMeta &&
       debouncedServerSearchTerm.length === 0 &&
-      normalizedInventoryMarcaFilter.length === 0 &&
-      normalizedInventoryCocheFilter.length === 0 &&
-      normalizedInventoryPiezaFilter.length === 0 &&
-      normalizedPrestadoDebtorFilters.length === 0;
+      !normalizedStatusFilter &&
+      !hasAnyFacetFilterActive;
 
     void fetchInventoryPage({
       page: inventoryPage,
@@ -3718,6 +3853,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       cocheFilter: normalizedInventoryCocheFilter,
       piezaFilter: normalizedInventoryPiezaFilter,
       prestadoDebtorFilters: normalizedStatusFilter === "PRESTADO" ? normalizedPrestadoDebtorFilters : [],
+      includeMeta: shouldIncludeMeta,
       includeFacetOptions: shouldIncludeFacetOptions,
       preserveSelection: false
     });
@@ -3731,6 +3867,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     normalizedPrestadoDebtorFilters,
     normalizedStatusFilter,
     debouncedServerSearchTerm,
+    hybridLocalHydrating,
     useServerPagination
   ]);
 
@@ -5094,6 +5231,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 </p>
                 {inventoryRefreshing && !loadingPage ? (
                   <p className="mt-1 text-amber-300">Actualizando resultados...</p>
+                ) : hybridLocalMode ? (
+                  <p className="mt-1 text-emerald-300">Busqueda local instantanea activa</p>
                 ) : (
                   <p className="mt-1 text-slate-500">Escribe y pulsa Buscar para filtrar</p>
                 )}
