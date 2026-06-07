@@ -218,7 +218,6 @@ const TABLE_OVERSCAN_ROWS = 8;
 const INVENTORY_TABLE_COLUMN_COUNT = 27;
 const WORKER_SEARCH_MIN_ITEMS = 250;
 const INVENTORY_PAGE_BLOCK_SIZE = 40;
-const SERVER_SEARCH_DEBOUNCE_MS = 90;
 const INVENTORY_PAGE_CACHE_TTL_MS = 25_000;
 const INVENTORY_LOADING_INDICATOR_DELAY_MS = 180;
 const MANUAL_SKU_NUMBER_PADDING = 5;
@@ -3694,17 +3693,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const canUseWorkerSearch = !useServerPagination && items.length >= WORKER_SEARCH_MIN_ITEMS;
 
   useEffect(() => {
-    if (!useServerPagination) {
-      setDebouncedServerSearchTerm(serverSearchTerm);
-      return;
-    }
-
-    const timeout = setTimeout(() => {
-      setDebouncedServerSearchTerm(serverSearchTerm);
-    }, SERVER_SEARCH_DEBOUNCE_MS);
-
-    return () => clearTimeout(timeout);
-  }, [serverSearchTerm, useServerPagination]);
+    setDebouncedServerSearchTerm(serverSearchTerm);
+  }, [serverSearchTerm]);
 
   useEffect(() => {
     const worker = searchWorkerRef.current;
@@ -3812,6 +3802,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const clearInventoryFilters = useCallback(() => {
     setSearchDraft("");
     setSearch("");
+    setDebouncedServerSearchTerm("");
+    lastServerFilterRequestSignatureRef.current = null;
     setStatusFilter(null);
     setInventoryMarcaFilter("");
     setInventoryCocheFilter("");
@@ -3824,6 +3816,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     const nextSearch = searchDraft.trim();
     if (nextSearch === search) return;
     setSearch(nextSearch);
+    setDebouncedServerSearchTerm(nextSearch);
+    lastServerFilterRequestSignatureRef.current = null;
     setInventoryPage(1);
   }, [search, searchDraft]);
 
@@ -3831,6 +3825,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     if (!search.length && !searchDraft.length) return;
     setSearch("");
     setSearchDraft("");
+    setDebouncedServerSearchTerm("");
+    lastServerFilterRequestSignatureRef.current = null;
     setInventoryPage(1);
   }, [search, searchDraft]);
 
