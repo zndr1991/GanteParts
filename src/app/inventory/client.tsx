@@ -3881,6 +3881,16 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     setInventoryPage(1);
   }, [search, searchDraft]);
 
+  const applyStatusTabFilter = useCallback((nextStatus: string | null) => {
+    setStatusFilterDraft(nextStatus);
+    setStatusFilter(nextStatus);
+    if (nextStatus !== "PRESTADO") {
+      setPrestadoDebtorFilters([]);
+    }
+    lastServerFilterRequestSignatureRef.current = null;
+    setInventoryPage(1);
+  }, []);
+
   useEffect(() => {
     setSearchDraft(search);
   }, [search]);
@@ -3925,8 +3935,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     const shouldIncludeMeta =
       inventoryPage === 1 &&
       debouncedServerSearchTerm.length === 0 &&
-      !hasAnyFacetFilterActive &&
-      (!normalizedStatusFilter || normalizedStatusFilter === "PRESTADO");
+      !normalizedStatusFilter &&
+      !hasAnyFacetFilterActive;
     const shouldIncludeFacetOptions =
       shouldIncludeMeta &&
       debouncedServerSearchTerm.length === 0 &&
@@ -5592,7 +5602,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                     key={label}
                     onClick={() => {
                       const nextStatus = isActive ? null : label;
-                      setStatusFilterDraft(nextStatus);
+                      applyStatusTabFilter(nextStatus);
                     }}
                     className={`${baseClasses} ${activeClasses}`}
                   >
