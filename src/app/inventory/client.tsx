@@ -223,6 +223,7 @@ const INVENTORY_PAGE_CACHE_TTL_MS = 25_000;
 const INVENTORY_LOADING_INDICATOR_DELAY_MS = 180;
 const MANUAL_SKU_NUMBER_PADDING = 5;
 const HYBRID_LOCAL_SEARCH_MAX_ITEMS = 3200;
+const HYBRID_LOCAL_AUTOLOAD_DELAY_MS = 2500;
 
 const makePhotoKey = (file: File) => `${file.name}-${file.size}-${file.lastModified}`;
 
@@ -735,6 +736,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const inventoryPageRequestIdRef = useRef(0);
   const inventoryRequestAbortRef = useRef<AbortController | null>(null);
   const hybridLoadAbortRef = useRef<AbortController | null>(null);
+  const hybridAutoloadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hybridAutoAttemptedRef = useRef(false);
   const loadingPageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastServerFilterRequestSignatureRef = useRef<string | null>(null);
@@ -989,6 +991,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         clearTimeout(loadingPageTimeoutRef.current);
         loadingPageTimeoutRef.current = null;
       }
+      if (hybridAutoloadTimeoutRef.current) {
+        clearTimeout(hybridAutoloadTimeoutRef.current);
+        hybridAutoloadTimeoutRef.current = null;
+      }
       if (inventoryRequestAbortRef.current) {
         inventoryRequestAbortRef.current.abort();
         inventoryRequestAbortRef.current = null;
@@ -1026,6 +1032,24 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     const interval = setInterval(() => fetchNotifications({ silent: true, search: "", page: 1 }), NOTIFICATIONS_POLL_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [fetchNotifications, isManualOnly, notificationsPage, notificationsSearch]);
+
+  useEffect(() => {
+    if (isManualOnly) return;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      void fetch("/api/inventory?page=1&pageSize=1&includeMeta=0", {
+        cache: "no-store",
+        signal: controller.signal
+      }).catch(() => {
+        // Warm-up best-effort: ignorar fallos de red o permisos de sesión.
+      });
+    }, 220);
+
+    return () => {
+      clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [isManualOnly]);
 
   const downloadTemplate = async () => {
     setDownloading(true);
@@ -1089,6 +1113,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     if (inventoryRequestAbortRef.current) {
       inventoryRequestAbortRef.current.abort();
       inventoryRequestAbortRef.current = null;
+    }
+    if (hybridLoadAbortRef.current) {
+      hybridLoadAbortRef.current.abort();
+      hybridLoadAbortRef.current = null;
     }
     if (loadingPageTimeoutRef.current) {
       clearTimeout(loadingPageTimeoutRef.current);
@@ -1353,8 +1381,19 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     if (hybridLocalMode) return;
     if (hybridLocalHydrating) return;
     if (hybridAutoAttemptedRef.current) return;
-    hybridAutoAttemptedRef.current = true;
-    void loadAllInventoryForHybrid();
+
+    hybridAutoloadTimeoutRef.current = setTimeout(() => {
+      hybridAutoloadTimeoutRef.current = null;
+      hybridAutoAttemptedRef.current = true;
+      void loadAllInventoryForHybrid();
+    }, HYBRID_LOCAL_AUTOLOAD_DELAY_MS);
+
+    return () => {
+      if (hybridAutoloadTimeoutRef.current) {
+        clearTimeout(hybridAutoloadTimeoutRef.current);
+        hybridAutoloadTimeoutRef.current = null;
+      }
+    };
   }, [canAutoEnableHybridLocal, hybridLocalHydrating, hybridLocalMode, loadAllInventoryForHybrid]);
 
   const refresh = useCallback(async () => {
