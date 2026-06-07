@@ -80,30 +80,27 @@ BEGIN
       USING GIN (
         (
           lower(
-            concat_ws(
-              '' '',
-              COALESCE("skuInternal", ''''),
-              COALESCE("title", ''''),
-              COALESCE("mlItemId", ''''),
-              COALESCE("sellerCustomField", ''''),
-              COALESCE("extraData"->>''descripcion_local'', ''''),
-              COALESCE("extraData"->>''descripcion_ml'', ''''),
-              COALESCE("extraData"->>''estatus_interno'', ''''),
-              COALESCE("extraData"->>''origen'', ''''),
-              COALESCE("extraData"->>''coche'', ''''),
-              COALESCE("extraData"->>''pieza'', ''''),
-              COALESCE("extraData"->>''marca'', ''''),
-              COALESCE("extraData"->>''ano_desde'', ''''),
-              COALESCE("extraData"->>''ano_hasta'', ''''),
-              COALESCE("extraData"->>''ubicacion'', ''''),
-              COALESCE("extraData"->>''inventario'', ''''),
-              COALESCE("extraData"->>''revision'', ''''),
-              COALESCE("extraData"->>''facebook'', ''''),
-              COALESCE("extraData"->>''prestado_vendido_a'', ''''),
-              COALESCE("extraData"->>''fecha_prestamo_pago'', ''''),
-              CAST(COALESCE("stock", 0) AS TEXT),
-              CAST(COALESCE("price", 0) AS TEXT)
-            )
+            COALESCE("skuInternal", '''') || '' '' ||
+            COALESCE("title", '''') || '' '' ||
+            COALESCE("mlItemId", '''') || '' '' ||
+            COALESCE("sellerCustomField", '''') || '' '' ||
+            COALESCE("extraData"->>''descripcion_local'', '''') || '' '' ||
+            COALESCE("extraData"->>''descripcion_ml'', '''') || '' '' ||
+            COALESCE("extraData"->>''estatus_interno'', '''') || '' '' ||
+            COALESCE("extraData"->>''origen'', '''') || '' '' ||
+            COALESCE("extraData"->>''coche'', '''') || '' '' ||
+            COALESCE("extraData"->>''pieza'', '''') || '' '' ||
+            COALESCE("extraData"->>''marca'', '''') || '' '' ||
+            COALESCE("extraData"->>''ano_desde'', '''') || '' '' ||
+            COALESCE("extraData"->>''ano_hasta'', '''') || '' '' ||
+            COALESCE("extraData"->>''ubicacion'', '''') || '' '' ||
+            COALESCE("extraData"->>''inventario'', '''') || '' '' ||
+            COALESCE("extraData"->>''revision'', '''') || '' '' ||
+            COALESCE("extraData"->>''facebook'', '''') || '' '' ||
+            COALESCE("extraData"->>''prestado_vendido_a'', '''') || '' '' ||
+            COALESCE("extraData"->>''fecha_prestamo_pago'', '''') || '' '' ||
+            CAST(COALESCE("stock", 0) AS TEXT) || '' '' ||
+            CAST(COALESCE("price", 0) AS TEXT)
           )
         ) gin_trgm_ops
       )
