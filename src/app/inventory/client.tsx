@@ -221,7 +221,6 @@ const INVENTORY_PAGE_BLOCK_SIZE = 40;
 const INVENTORY_PAGE_CACHE_TTL_MS = 25_000;
 const INVENTORY_LOADING_INDICATOR_DELAY_MS = 180;
 const MANUAL_SKU_NUMBER_PADDING = 5;
-const HYBRID_LOCAL_SEARCH_MAX_ITEMS = 3200;
 const HYBRID_LOCAL_AUTOLOAD_DELAY_MS = 2500;
 
 const makePhotoKey = (file: File) => `${file.name}-${file.size}-${file.lastModified}`;
@@ -644,9 +643,13 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const [searchDraft, setSearchDraft] = useState("");
   const [focusedRowInfo, setFocusedRowInfo] = useState<FocusedInfo | null>(null);
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
+  const [statusFilterDraft, setStatusFilterDraft] = useState<string | null>(null);
   const [inventoryMarcaFilter, setInventoryMarcaFilter] = useState("");
+  const [inventoryMarcaFilterDraft, setInventoryMarcaFilterDraft] = useState("");
   const [inventoryCocheFilter, setInventoryCocheFilter] = useState("");
+  const [inventoryCocheFilterDraft, setInventoryCocheFilterDraft] = useState("");
   const [inventoryPiezaFilter, setInventoryPiezaFilter] = useState("");
+  const [inventoryPiezaFilterDraft, setInventoryPiezaFilterDraft] = useState("");
   const [prestadoDebtorFilters, setPrestadoDebtorFilters] = useState<string[]>([]);
   const [form, setForm] = useState({
     skuInternal: "",
@@ -794,11 +797,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const canImportInventory = canEditInventory;
   const canManageMercadoLibre = canEditInventory;
   const thumbnailsActive = THUMBNAILS_ENABLED;
-  const canAutoEnableHybridLocal =
-    !isManualOnly &&
-    initialPage.total > 0 &&
-    initialPage.total <= HYBRID_LOCAL_SEARCH_MAX_ITEMS;
-  const useServerPagination = !isManualOnly && !hybridLocalMode;
+  const canAutoEnableHybridLocal = false;
+  const useServerPagination = !isManualOnly;
 
   useEffect(() => {
     statusTotalsRef.current = statusTotals;
@@ -3763,9 +3763,13 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     !useServerPagination && canUseWorkerSearch && normalizedSearch.length > 0 && (workerSearching || !workerSearchResult || workerSearchResult.query !== normalizedSearch);
 
   const normalizedStatusFilter = statusFilter?.toUpperCase() ?? null;
+  const normalizedStatusFilterDraft = statusFilterDraft?.toUpperCase() ?? null;
   const normalizedInventoryMarcaFilter = inventoryMarcaFilter.trim().toUpperCase();
+  const normalizedInventoryMarcaFilterDraft = inventoryMarcaFilterDraft.trim().toUpperCase();
   const normalizedInventoryCocheFilter = inventoryCocheFilter.trim().toUpperCase();
+  const normalizedInventoryCocheFilterDraft = inventoryCocheFilterDraft.trim().toUpperCase();
   const normalizedInventoryPiezaFilter = inventoryPiezaFilter.trim().toUpperCase();
+  const normalizedInventoryPiezaFilterDraft = inventoryPiezaFilterDraft.trim().toUpperCase();
   const normalizedPrestadoDebtorFilters = useMemo(
     () =>
       Array.from(
@@ -3789,8 +3793,19 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     normalizedPrestadoDebtorFilters.length > 0;
   const hasAnyInventoryFiltersActive =
     hasActiveInventorySearch || Boolean(normalizedStatusFilter) || hasActiveInventoryFacets;
-  const hasPendingSearchDraftChanges = searchDraft.trim() !== search;
-  const canShowAllInventory = hasAnyInventoryFiltersActive || searchDraft.trim().length > 0;
+  const hasAnyDraftInventoryFilters =
+    searchDraft.trim().length > 0 ||
+    Boolean(normalizedStatusFilterDraft) ||
+    normalizedInventoryMarcaFilterDraft.length > 0 ||
+    normalizedInventoryCocheFilterDraft.length > 0 ||
+    normalizedInventoryPiezaFilterDraft.length > 0;
+  const hasPendingFilterDraftChanges =
+    searchDraft.trim() !== search ||
+    normalizedStatusFilterDraft !== normalizedStatusFilter ||
+    normalizedInventoryMarcaFilterDraft !== normalizedInventoryMarcaFilter ||
+    normalizedInventoryCocheFilterDraft !== normalizedInventoryCocheFilter ||
+    normalizedInventoryPiezaFilterDraft !== normalizedInventoryPiezaFilter;
+  const canShowAllInventory = hasAnyInventoryFiltersActive || hasAnyDraftInventoryFilters;
   const activeInventoryFilterCount =
     Number(hasActiveInventorySearch) +
     Number(Boolean(normalizedStatusFilter)) +
@@ -3805,21 +3820,57 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     setDebouncedServerSearchTerm("");
     lastServerFilterRequestSignatureRef.current = null;
     setStatusFilter(null);
+    setStatusFilterDraft(null);
     setInventoryMarcaFilter("");
+    setInventoryMarcaFilterDraft("");
     setInventoryCocheFilter("");
+    setInventoryCocheFilterDraft("");
     setInventoryPiezaFilter("");
+    setInventoryPiezaFilterDraft("");
     setPrestadoDebtorFilters([]);
     setInventoryPage(1);
   }, []);
 
   const applyInventorySearch = useCallback(() => {
     const nextSearch = searchDraft.trim();
-    if (nextSearch === search) return;
+    const nextStatus = normalizedStatusFilterDraft;
+    const nextMarcaFilter = normalizedInventoryMarcaFilterDraft;
+    const nextCocheFilter = normalizedInventoryCocheFilterDraft;
+    const nextPiezaFilter = normalizedInventoryPiezaFilterDraft;
+
+    if (
+      nextSearch === search &&
+      nextStatus === normalizedStatusFilter &&
+      nextMarcaFilter === normalizedInventoryMarcaFilter &&
+      nextCocheFilter === normalizedInventoryCocheFilter &&
+      nextPiezaFilter === normalizedInventoryPiezaFilter
+    ) {
+      return;
+    }
+
     setSearch(nextSearch);
     setDebouncedServerSearchTerm(nextSearch);
     lastServerFilterRequestSignatureRef.current = null;
+    setStatusFilter(nextStatus);
+    setInventoryMarcaFilter(nextMarcaFilter);
+    setInventoryCocheFilter(nextCocheFilter);
+    setInventoryPiezaFilter(nextPiezaFilter);
+    if (nextStatus !== "PRESTADO") {
+      setPrestadoDebtorFilters([]);
+    }
     setInventoryPage(1);
-  }, [search, searchDraft]);
+  }, [
+    search,
+    searchDraft,
+    normalizedStatusFilterDraft,
+    normalizedStatusFilter,
+    normalizedInventoryMarcaFilterDraft,
+    normalizedInventoryMarcaFilter,
+    normalizedInventoryCocheFilterDraft,
+    normalizedInventoryCocheFilter,
+    normalizedInventoryPiezaFilterDraft,
+    normalizedInventoryPiezaFilter
+  ]);
 
   const clearAppliedInventorySearch = useCallback(() => {
     if (!search.length && !searchDraft.length) return;
@@ -3833,6 +3884,13 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   useEffect(() => {
     setSearchDraft(search);
   }, [search]);
+
+  useEffect(() => {
+    setStatusFilterDraft(statusFilter);
+    setInventoryMarcaFilterDraft(inventoryMarcaFilter);
+    setInventoryCocheFilterDraft(inventoryCocheFilter);
+    setInventoryPiezaFilterDraft(inventoryPiezaFilter);
+  }, [statusFilter, inventoryMarcaFilter, inventoryCocheFilter, inventoryPiezaFilter]);
 
   useEffect(() => {
     if (normalizedStatusFilter === "PRESTADO") return;
@@ -3866,14 +3924,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       normalizedPrestadoDebtorFilters.length > 0;
     const shouldIncludeMeta =
       inventoryPage === 1 &&
-      (
-        normalizedStatusFilter === "PRESTADO" ||
-        (
-          debouncedServerSearchTerm.length === 0 &&
-          !normalizedStatusFilter &&
-          !hasAnyFacetFilterActive
-        )
-      );
+      debouncedServerSearchTerm.length === 0 &&
+      !hasAnyFacetFilterActive &&
+      (!normalizedStatusFilter || normalizedStatusFilter === "PRESTADO");
     const shouldIncludeFacetOptions =
       shouldIncludeMeta &&
       debouncedServerSearchTerm.length === 0 &&
@@ -4328,6 +4381,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const prestadoSummary = useMemo(() => {
     if (normalizedStatusFilter !== "PRESTADO") return null;
     if (prestadoMetrics) return prestadoMetrics;
+    if (useServerPagination) return null;
 
     let total = 0;
     let totalCost = 0;
@@ -4351,7 +4405,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       debt: roundedTotal,
       profit: roundCurrencyValue(roundedTotal - roundCurrencyValue(totalCost))
     };
-  }, [filteredItems, normalizedStatusFilter, prestadoMetrics]);
+  }, [filteredItems, normalizedStatusFilter, prestadoMetrics, useServerPagination]);
 
   return (
     <>
@@ -4376,7 +4430,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 setToastNotification(null);
               }}
             >
-              ×
+              x
             </button>
           </div>
           <div className="mt-3 flex items-center gap-2 text-xs text-slate-400">
@@ -5291,10 +5345,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 />
                 <button
                   type="submit"
-                  disabled={!hasPendingSearchDraftChanges}
+                  disabled={!hasPendingFilterDraftChanges}
                   className="rounded-xl border border-amber-400/70 bg-amber-500/15 px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-amber-100 hover:bg-amber-500/25 disabled:opacity-50"
                 >
-                  Buscar
+                  Aplicar filtros
                 </button>
                 <button
                   type="button"
@@ -5307,8 +5361,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
               </form>
 
               <select
-                value={inventoryMarcaFilter}
-                onChange={(event) => setInventoryMarcaFilter(event.target.value)}
+                value={inventoryMarcaFilterDraft}
+                onChange={(event) => setInventoryMarcaFilterDraft(event.target.value)}
                 className="rounded-xl bg-slate-900 border border-slate-700 px-3 py-2.5 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
               >
                 <option value="">Marca (todas)</option>
@@ -5320,8 +5374,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
               </select>
 
               <select
-                value={inventoryCocheFilter}
-                onChange={(event) => setInventoryCocheFilter(event.target.value)}
+                value={inventoryCocheFilterDraft}
+                onChange={(event) => setInventoryCocheFilterDraft(event.target.value)}
                 className="rounded-xl bg-slate-900 border border-slate-700 px-3 py-2.5 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
               >
                 <option value="">Coche (todos)</option>
@@ -5333,8 +5387,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
               </select>
 
               <select
-                value={inventoryPiezaFilter}
-                onChange={(event) => setInventoryPiezaFilter(event.target.value)}
+                value={inventoryPiezaFilterDraft}
+                onChange={(event) => setInventoryPiezaFilterDraft(event.target.value)}
                 className="rounded-xl bg-slate-900 border border-slate-700 px-3 py-2.5 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
               >
                 <option value="">Pieza (todas)</option>
@@ -5527,7 +5581,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           {statusCounters.length > 0 && (
             <div className="flex flex-wrap gap-2 rounded-2xl border border-slate-700 bg-slate-900/60 p-3 text-[11px] uppercase tracking-wide text-slate-200">
               {statusCounters.map(([label, count]) => {
-                const isActive = statusFilter === label;
+                const isActive = normalizedStatusFilterDraft === label;
                 const baseClasses = "flex items-center gap-2 rounded-xl border px-3 py-1 text-left transition focus:outline-none";
                 const activeClasses = isActive
                   ? "border-amber-400 bg-amber-400/20 text-amber-100"
@@ -5538,7 +5592,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                     key={label}
                     onClick={() => {
                       const nextStatus = isActive ? null : label;
-                      setStatusFilter(nextStatus);
+                      setStatusFilterDraft(nextStatus);
                     }}
                     className={`${baseClasses} ${activeClasses}`}
                   >
