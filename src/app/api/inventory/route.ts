@@ -163,7 +163,12 @@ const buildStatusFilterSql = (statusFilter: string | null) => {
   `;
 };
 
-const buildSearchFilterSql = (searchFilter: string | null) => {
+const buildSearchFilterSql = (
+  searchFilter: string | null,
+  options?: {
+    lightweight?: boolean;
+  }
+) => {
   if (!searchFilter) return Prisma.empty;
   const normalizedToken = normalizeSearchToken(searchFilter);
   const lowerLikeValue = `%${searchFilter.toLowerCase()}%`;
@@ -187,6 +192,23 @@ const buildSearchFilterSql = (searchFilter: string | null) => {
         OR replace(replace(replace(lower(coalesce("sellerCustomField", '')), '-', ''), ' ', ''), '_', '') LIKE ${normalizedLikeValue}
       `
     : Prisma.empty;
+
+  if (options?.lightweight) {
+    return Prisma.sql`
+      AND (
+        lower(COALESCE("skuInternal", '')) LIKE ${lowerLikeValue}
+        OR lower(COALESCE("title", '')) LIKE ${lowerLikeValue}
+        OR lower(COALESCE("mlItemId", '')) LIKE ${lowerLikeValue}
+        OR lower(COALESCE("sellerCustomField", '')) LIKE ${lowerLikeValue}
+        OR lower(COALESCE("extraData"->>'descripcion_local', '')) LIKE ${lowerLikeValue}
+        OR lower(COALESCE("extraData"->>'descripcion_ml', '')) LIKE ${lowerLikeValue}
+        OR lower(COALESCE("extraData"->>'pieza', '')) LIKE ${lowerLikeValue}
+        OR lower(COALESCE("extraData"->>'marca', '')) LIKE ${lowerLikeValue}
+        OR lower(COALESCE("extraData"->>'coche', '')) LIKE ${lowerLikeValue}
+        ${normalizedCodeSql}
+      )
+    `;
+  }
 
   return Prisma.sql`
     AND (
@@ -524,7 +546,7 @@ export async function GET(req: Request) {
 
     const ownerSql = ownerId ? Prisma.sql`AND "ownerId" = ${ownerId}` : Prisma.empty;
     const statusSql = buildStatusFilterSql(statusFilter);
-    const searchSql = buildSearchFilterSql(searchFilter);
+    const searchSql = buildSearchFilterSql(searchFilter, { lightweight: !includeMeta });
     const marcaSql = buildMarcaFilterSql(marcaFilter);
     const cocheSql = buildCocheFilterSql(cocheFilter);
     const piezaSql = buildPiezaFilterSql(piezaFilter);
