@@ -537,7 +537,7 @@ export async function GET(req: Request) {
         !statusFilter && !marcaFilter && !cocheFilter && !piezaFilter && !prestadoDebtorFilters.length;
       const fastSearchMode = Boolean(searchFilter && hasNoAdditionalFilters && page === 1);
       const fastCodeSearchMode = codeSearchMode && fastSearchMode;
-      const shouldUseFastCount = fastSearchMode || fastCodeSearchMode;
+      const shouldUseFastCount = fastSearchMode || fastCodeSearchMode || !includeMeta;
       const shouldLoadPrestadoMetrics = statusFilter === "PRESTADO";
 
       const [idRows, countRows, statusTotals, prestadoMetrics, facetOptions] = await Promise.all([
@@ -601,8 +601,8 @@ export async function GET(req: Request) {
 
       const total = shouldUseFastCount
         ? hasMoreFastRows
-          ? pageSize + 1
-          : ids.length
+          ? skip + pageSize + 1
+          : skip + ids.length
         : Number(countRows[0]?.count ?? 0);
       const serialized = items.map((item) => serializeInventoryItem(item));
       const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -619,14 +619,23 @@ export async function GET(req: Request) {
       });
     }
 
-    const [items, total, statusTotals, facetOptions] = await Promise.all([
+    const shouldUseFastCount = !includeMeta;
+
+    const [items, countRows, statusTotals, facetOptions] = await Promise.all([
       prisma.inventoryItem.findMany({
         where,
         orderBy: { updatedAt: "desc" },
         skip,
-        take: pageSize
+        take: shouldUseFastCount ? pageSize + 1 : pageSize
       }),
-      prisma.inventoryItem.count({ where }),
+      shouldUseFastCount
+        ? Promise.resolve<CountRow[]>([])
+        : prisma.$queryRaw<CountRow[]>(Prisma.sql`
+            SELECT COUNT(*) AS count
+            FROM "InventoryItem"
+            WHERE 1=1
+            ${ownerSql}
+          `),
       includeMeta
         ? getStatusTotals(ownerId)
         : Promise.resolve<Record<string, number> | null>(null),
@@ -644,7 +653,15 @@ export async function GET(req: Request) {
         : Promise.resolve<InventoryFacetOptions | null>(null)
     ]);
 
-    const serialized = items.map((item) => serializeInventoryItem(item));
+    const hasMoreFastRows = shouldUseFastCount && items.length > pageSize;
+    const visibleItems = hasMoreFastRows ? items.slice(0, pageSize) : items;
+    const total = shouldUseFastCount
+      ? hasMoreFastRows
+        ? skip + pageSize + 1
+        : skip + visibleItems.length
+      : Number(countRows[0]?.count ?? 0);
+
+    const serialized = visibleItems.map((item) => serializeInventoryItem(item));
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
     return NextResponse.json({
