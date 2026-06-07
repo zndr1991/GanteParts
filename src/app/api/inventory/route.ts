@@ -200,11 +200,6 @@ const buildSearchFilterSql = (
         OR lower(COALESCE("title", '')) LIKE ${lowerLikeValue}
         OR lower(COALESCE("mlItemId", '')) LIKE ${lowerLikeValue}
         OR lower(COALESCE("sellerCustomField", '')) LIKE ${lowerLikeValue}
-        OR lower(COALESCE("extraData"->>'descripcion_local', '')) LIKE ${lowerLikeValue}
-        OR lower(COALESCE("extraData"->>'descripcion_ml', '')) LIKE ${lowerLikeValue}
-        OR lower(COALESCE("extraData"->>'pieza', '')) LIKE ${lowerLikeValue}
-        OR lower(COALESCE("extraData"->>'marca', '')) LIKE ${lowerLikeValue}
-        OR lower(COALESCE("extraData"->>'coche', '')) LIKE ${lowerLikeValue}
         ${normalizedCodeSql}
       )
     `;
