@@ -725,6 +725,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   const inventoryPageRequestIdRef = useRef(0);
   const inventoryRequestAbortRef = useRef<AbortController | null>(null);
   const loadingPageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastServerFilterRequestSignatureRef = useRef<string | null>(null);
   const inventoryPageCacheRef = useRef<Map<string, { expiresAt: number; payload: InventoryPageCachePayload }>>(
     new Map()
   );
@@ -3686,8 +3687,28 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   useEffect(() => {
     if (!useServerPagination) return;
 
+    const requestFilterSignature = JSON.stringify({
+      search: debouncedServerSearchTerm,
+      statusFilter: normalizedStatusFilter,
+      marcaFilter: normalizedInventoryMarcaFilter,
+      cocheFilter: normalizedInventoryCocheFilter,
+      piezaFilter: normalizedInventoryPiezaFilter,
+      prestadoDebtorFilters: normalizedStatusFilter === "PRESTADO" ? normalizedPrestadoDebtorFilters : []
+    });
+    const filtersChanged = lastServerFilterRequestSignatureRef.current !== requestFilterSignature;
+    if (filtersChanged && inventoryPage !== 1) {
+      return;
+    }
+
+    lastServerFilterRequestSignatureRef.current = requestFilterSignature;
+
     const shouldIncludeFacetOptions =
-      inventoryPage === 1 && debouncedServerSearchTerm.length === 0;
+      inventoryPage === 1 &&
+      debouncedServerSearchTerm.length === 0 &&
+      normalizedInventoryMarcaFilter.length === 0 &&
+      normalizedInventoryCocheFilter.length === 0 &&
+      normalizedInventoryPiezaFilter.length === 0 &&
+      normalizedPrestadoDebtorFilters.length === 0;
 
     void fetchInventoryPage({
       page: inventoryPage,
