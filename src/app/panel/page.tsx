@@ -11,6 +11,7 @@ type Shortcut = {
   description: string;
   accent: string;
   border: string;
+  roles?: string[];
 };
 
 const shortcuts: Shortcut[] = [
@@ -41,6 +42,14 @@ const shortcuts: Shortcut[] = [
     description: "Registra ingresos, egresos semanales y administra deudas con abonos.",
     accent: "from-amber-500/20 to-amber-500/5",
     border: "border-amber-400/40"
+  },
+  {
+    href: "/panel/users",
+    title: "Gestion de usuarios",
+    description: "Crea cuentas internas y define roles de acceso para el equipo.",
+    accent: "from-violet-500/15 to-violet-500/5",
+    border: "border-violet-400/40",
+    roles: ["admin"]
   }
 ];
 
@@ -51,11 +60,16 @@ export default async function PanelPage() {
   }
 
   const displayName = session.user.name || session.user.email || "Operador";
+  const normalizedRole = (session.user.role ?? "operator").toString().toLowerCase();
   const roleLabel = (session.user.role ?? "operator").toString().toUpperCase();
+  const visibleShortcuts = shortcuts.filter((shortcut) => {
+    if (!shortcut.roles?.length) return true;
+    return shortcut.roles.includes(normalizedRole);
+  });
 
   return (
     <main className="min-h-screen bg-slate-950 px-4 py-10 text-slate-100">
-      <PanelRoutePrefetch routes={shortcuts.map((shortcut) => shortcut.href)} />
+      <PanelRoutePrefetch routes={visibleShortcuts.map((shortcut) => shortcut.href)} />
       <div className="mx-auto flex max-w-4xl flex-col gap-8">
         <section className="rounded-3xl border border-slate-800 bg-gradient-to-br from-slate-900/80 to-slate-900/30 p-8 shadow-xl">
           <p className="text-xs uppercase tracking-[0.4em] text-amber-400">Panel principal</p>
@@ -90,6 +104,14 @@ export default async function PanelPage() {
             >
               Abrir finanzas
             </Link>
+            {normalizedRole === "admin" && (
+              <Link
+                href="/panel/users"
+                className="rounded-full border border-violet-400/50 px-4 py-2 text-sm font-semibold text-violet-200 hover:bg-violet-500/10"
+              >
+                Gestion de usuarios
+              </Link>
+            )}
             <a
               href="/api/auth/signout"
               className="rounded-full border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:border-rose-400"
@@ -100,7 +122,7 @@ export default async function PanelPage() {
         </section>
 
         <section className="grid gap-4 sm:grid-cols-2">
-          {shortcuts.map((shortcut) => (
+          {visibleShortcuts.map((shortcut) => (
             <Link
               key={shortcut.href}
               href={shortcut.href}

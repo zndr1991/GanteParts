@@ -64,13 +64,13 @@ export default function LoginPage() {
           >
             {loading ? "Entrando..." : "Entrar"}
           </button>
-        </form>
-        <div className="text-sm text-slate-300 text-center">
-          <span>No tienes cuenta? </span>
-          <Link href="/registro" className="text-amber-300 hover:text-amber-200">
-            Crear cuenta
+          <Link
+            href="/public-inventory"
+            className="block w-full rounded-md border border-emerald-500/60 bg-emerald-500/10 py-2 text-center text-sm font-semibold text-emerald-200 transition hover:border-emerald-400 hover:bg-emerald-400/20"
+          >
+            Ver inventario publico
           </Link>
-        </div>
+        </form>
       </div>
     </main>
   );

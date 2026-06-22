@@ -18,12 +18,6 @@ export default function Home() {
               Ingresar
             </Link>
             <Link
-              href="/registro"
-              className="px-4 py-2 rounded-lg border border-slate-600 text-slate-100 font-medium hover:border-amber-400 hover:text-amber-200 transition"
-            >
-              Crear cuenta
-            </Link>
-            <Link
               href="/public-inventory"
               className="px-4 py-2 rounded-lg border border-emerald-500/60 bg-emerald-500/10 text-emerald-200 font-medium hover:border-emerald-400 hover:bg-emerald-400/20 transition"
             >
