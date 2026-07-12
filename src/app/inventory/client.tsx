@@ -6791,8 +6791,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       </div>
       </main>
       {inventoryEditForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-6xl rounded-2xl border border-slate-700 bg-slate-900 p-5 shadow-2xl">
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/70 p-2 sm:p-4">
+          <div className="mx-auto flex min-h-full w-full max-w-6xl items-start sm:items-center">
+          <div className="my-2 flex w-full max-h-[calc(100dvh-1rem)] flex-col rounded-2xl border border-slate-700 bg-slate-900 p-3 shadow-2xl sm:max-h-[92vh] sm:p-5">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h3 className="text-lg font-semibold text-slate-100">Editar registro</h3>
@@ -6810,7 +6811,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
               </button>
             </div>
 
-            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="mt-4 flex-1 overflow-y-auto pr-1 sm:pr-2">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <input
                 className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-amber-400 focus:outline-none"
                 placeholder="SKU interno *"
@@ -7001,8 +7003,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
               ))}
             </datalist>
             {inventoryEditError && <p className="mt-3 text-sm text-rose-300">{inventoryEditError}</p>}
+            </div>
 
-            <div className="mt-6 flex flex-wrap justify-end gap-3">
+            <div className="mt-4 flex flex-wrap justify-end gap-3 border-t border-slate-700/70 pt-3 pb-[env(safe-area-inset-bottom)] sm:mt-5 sm:pt-4">
               <button
                 type="button"
                 className="rounded-md border border-slate-600 px-4 py-2 text-xs text-slate-200 hover:border-amber-300 disabled:opacity-50"
@@ -7020,6 +7023,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 {inventoryEditSaving ? "Guardando..." : "Guardar cambios"}
               </button>
             </div>
+          </div>
           </div>
         </div>
       )}
