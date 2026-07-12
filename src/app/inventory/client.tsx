@@ -264,13 +264,18 @@ const normalizeFormaPublicacionValue = (value: unknown) => {
   return "";
 };
 
-const normalizeCompatibilidadesText = (value: unknown) => {
+const splitCompatibilidadesEntries = (value: unknown) => {
   return (value ?? "")
     .toString()
     .replace(/\r\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/\s*,\s*/g, ", ")
-    .trim();
+    .split(/\s*\|\s*|\n|,/g)
+    .map((entry) => entry.trim().replace(/\s+/g, " "))
+    .filter((entry) => entry.length);
+};
+
+const normalizeCompatibilidadesText = (value: unknown) => {
+  const entries = splitCompatibilidadesEntries(value).map((entry) => entry.toUpperCase());
+  return Array.from(new Set(entries)).join(" | ");
 };
 
 const buildInventorySearchText = (item: Item) => {
@@ -2237,6 +2242,55 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     setModalActiveIndex((current) => (current + 1) % modalPhotos.length);
   };
 
+  const addManualCompatibility = useCallback(() => {
+    const cocheRaw = window.prompt("Coche compatible (ej: YARIS R)");
+    if (cocheRaw === null) return;
+
+    const coche = cocheRaw.trim().toUpperCase().replace(/\s+/g, " ");
+    if (!coche.length) {
+      setMessage("Debes capturar el coche para agregar compatibilidad");
+      return;
+    }
+
+    const anoDesdeRaw = window.prompt("Año desde (ej: 2016)");
+    if (anoDesdeRaw === null) return;
+
+    const anoHastaRaw = window.prompt("Año hasta (ej: 2020)");
+    if (anoHastaRaw === null) return;
+
+    const anoDesde = Number.parseInt(anoDesdeRaw.trim(), 10);
+    const anoHasta = Number.parseInt(anoHastaRaw.trim(), 10);
+    const isValidYear = (year: number) => Number.isInteger(year) && year >= 1950 && year <= 2100;
+
+    if (!isValidYear(anoDesde) || !isValidYear(anoHasta)) {
+      setMessage("Años inválidos en compatibilidad. Usa formato 2016 a 2020.");
+      return;
+    }
+
+    if (anoHasta < anoDesde) {
+      setMessage("Año hasta no puede ser menor que año desde.");
+      return;
+    }
+
+    const compatibilityEntry = `${coche} ${anoDesde}-${anoHasta}`;
+    setForm((current) => {
+      const currentEntries = splitCompatibilidadesEntries(current.compatibilidades).map((entry) => entry.toUpperCase());
+      if (!currentEntries.includes(compatibilityEntry)) {
+        currentEntries.push(compatibilityEntry);
+      }
+      return { ...current, compatibilidades: currentEntries.join(" | ") };
+    });
+  }, []);
+
+  const removeManualCompatibility = useCallback((entryToRemove: string) => {
+    setForm((current) => {
+      const currentEntries = splitCompatibilidadesEntries(current.compatibilidades).map((entry) => entry.toUpperCase());
+      const nextEntries = currentEntries.filter((entry) => entry !== entryToRemove.toUpperCase());
+      if (nextEntries.length === currentEntries.length) return current;
+      return { ...current, compatibilidades: nextEntries.join(" | ") };
+    });
+  }, []);
+
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canCreateManual) {
@@ -3157,6 +3211,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
   const anoDesdeNumber = form.anoDesde ? Number(form.anoDesde) : undefined;
   const anoHastaNumber = form.anoHasta ? Number(form.anoHasta) : undefined;
+  const manualCompatibilityEntries = useMemo(
+    () => Array.from(new Set(splitCompatibilidadesEntries(form.compatibilidades).map((entry) => entry.toUpperCase()))),
+    [form.compatibilidades]
+  );
   const lastManualAddedItems = useMemo(() => {
     const getItemTimestamp = (item: Item) => {
       const createdAt = Date.parse(((item as { createdAt?: string | Date }).createdAt ?? "").toString());
@@ -4954,12 +5012,48 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                         value={form.observaciones}
                         onChange={(e) => setForm((f) => ({ ...f, observaciones: e.target.value }))}
                       />
-                      <input
-                        className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
-                        placeholder="Compatibilidades (ej: YARIS R 2016-2020, MAZDA 2 2018-2023)"
-                        value={form.compatibilidades}
-                        onChange={(e) => setForm((f) => ({ ...f, compatibilidades: e.target.value }))}
-                      />
+                      <div className="sm:col-span-3 space-y-2 rounded-md border border-slate-700/80 bg-slate-950/40 p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-xs text-slate-300">Compatibilidades (opcional)</p>
+                          <button
+                            type="button"
+                            className="rounded-md border border-amber-400/50 bg-amber-500/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-amber-200 hover:bg-amber-500/20"
+                            onClick={addManualCompatibility}
+                          >
+                            Agregar compatibilidad
+                          </button>
+                        </div>
+                        <input
+                          className="w-full rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                          placeholder="También puedes escribir manualmente (ej: YARIS R 2016-2020 | MAZDA 2 2018-2023)"
+                          value={form.compatibilidades}
+                          onChange={(e) => setForm((f) => ({ ...f, compatibilidades: e.target.value }))}
+                        />
+                        {manualCompatibilityEntries.length > 0 ? (
+                          <div className="flex flex-wrap gap-2">
+                            {manualCompatibilityEntries.map((entry) => (
+                              <span
+                                key={entry}
+                                className="inline-flex items-center gap-2 rounded-full border border-slate-600 bg-slate-900 px-2.5 py-1 text-[11px] text-slate-200"
+                              >
+                                <span>{entry}</span>
+                                <button
+                                  type="button"
+                                  className="text-rose-300 hover:text-rose-200"
+                                  onClick={() => removeManualCompatibility(entry)}
+                                  aria-label={`Quitar compatibilidad ${entry}`}
+                                >
+                                  x
+                                </button>
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-[11px] text-slate-500">
+                            Si no aplica, déjalo vacío. Si aplica, usa el botón y te pedirá coche y años.
+                          </p>
+                        )}
+                      </div>
 
                       <div className="sm:col-span-3 space-y-3">
                         <div className="flex items-center justify-between text-xs text-slate-400">
