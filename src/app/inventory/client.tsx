@@ -5179,31 +5179,76 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                         <div className="mt-3 space-y-2">
                           {lastManualAddedItems.map((item) => {
                             const extra = item.extraData ?? {};
+                            const photosCount = typeof item.photoCount === "number" ? item.photoCount : 0;
+                            const previewEnabled = thumbnailsActive && photosCount > 0;
+                            const previewSrc = previewEnabled ? getThumbnailSrc(item.id) : null;
                             return (
                               <article
                                 key={`manual-last-${item.id}`}
                                 className="rounded-lg border border-slate-700 bg-slate-950/50 p-3"
                               >
                                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                                  <div className="space-y-1">
-                                    <p className="text-sm font-semibold text-slate-100">{getItemPieceName(item)}</p>
-                                    <p className="text-xs text-amber-200">SKU: {item.skuInternal || "-"}</p>
-                                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-300">
-                                      <span>Alto: {extra.alto ?? "-"}</span>
-                                      <span>Largo: {extra.largo ?? "-"}</span>
-                                      <span>Ancho: {extra.ancho ?? "-"}</span>
-                                      <span>Peso: {extra.peso ?? "-"}</span>
-                                      <span>Forma: {extra.forma_publicacion ?? "-"}</span>
+                                  <div className="flex flex-1 flex-col gap-3 sm:flex-row sm:items-start">
+                                    <button
+                                      type="button"
+                                      onClick={() => openPhotoModal(item)}
+                                      disabled={!canEditInventory}
+                                      className={`relative flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-800 bg-slate-950/70 text-[10px] text-slate-400 ${
+                                        canEditInventory ? "hover:border-amber-300" : "opacity-70"
+                                      }`}
+                                      aria-label={previewEnabled ? "Abrir fotos" : "Sin fotos"}
+                                    >
+                                      {previewEnabled ? (
+                                        <img
+                                          src={previewSrc ?? undefined}
+                                          alt={`Miniatura ${item.skuInternal}`}
+                                          className="h-full w-full object-cover"
+                                          loading="lazy"
+                                          decoding="async"
+                                          onError={(event) => {
+                                            event.currentTarget.style.display = "none";
+                                          }}
+                                        />
+                                      ) : (
+                                        <span>Sin foto</span>
+                                      )}
+                                      <span className="absolute bottom-1 right-1 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-slate-100">
+                                        {photosCount}
+                                      </span>
+                                    </button>
+                                    <div className="space-y-1">
+                                      <p className="text-sm font-semibold text-slate-100">{getItemPieceName(item)}</p>
+                                      <p className="text-xs text-amber-200">SKU: {item.skuInternal || "-"}</p>
+                                      <p className="text-[11px] text-slate-400">
+                                        Usa el boton Fotos para cargar imagenes faltantes y guardarlas en la publicacion.
+                                      </p>
+                                      <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-300">
+                                        <span>Alto: {extra.alto ?? "-"}</span>
+                                        <span>Largo: {extra.largo ?? "-"}</span>
+                                        <span>Ancho: {extra.ancho ?? "-"}</span>
+                                        <span>Peso: {extra.peso ?? "-"}</span>
+                                        <span>Forma: {extra.forma_publicacion ?? "-"}</span>
+                                      </div>
                                     </div>
                                   </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => openInventoryEditModal(item)}
-                                    disabled={!canEditInventory}
-                                    className="rounded-md border border-amber-400/60 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-amber-200 hover:border-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
-                                  >
-                                    Editar
-                                  </button>
+                                  <div className="flex flex-col gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => openPhotoModal(item)}
+                                      disabled={!canEditInventory}
+                                      className="rounded-md border border-emerald-400/60 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-emerald-200 hover:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                      Fotos
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => openInventoryEditModal(item)}
+                                      disabled={!canEditInventory}
+                                      className="rounded-md border border-amber-400/60 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-amber-200 hover:border-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                      Editar
+                                    </button>
+                                  </div>
                                 </div>
                               </article>
                             );
