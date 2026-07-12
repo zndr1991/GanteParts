@@ -67,6 +67,8 @@ const headerMap: Record<string, string> = {
   formapublicacion: "extra_forma_publicacion",
   observaciones: "extra_observaciones",
   observacion: "extra_observaciones",
+  compatibilidades: "extra_compatibilidades",
+  compatibilidad: "extra_compatibilidades",
   ubicacion: "extra_ubicacion",
   facebook: "extra_facebook",
   descripcionlocal: "extra_descripcion_local",

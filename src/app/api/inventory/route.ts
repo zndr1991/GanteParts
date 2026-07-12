@@ -69,6 +69,7 @@ const updateSchema = z.object({
     formaPublicacionSchema.optional().nullable()
   ),
   observaciones: z.string().optional().nullable(),
+  compatibilidades: z.string().optional().nullable(),
   photos: z.array(z.string().min(1)).max(MAX_ITEM_PHOTOS).optional(),
   stock: z.number().int().min(0).optional(),
   price: z.number().nonnegative().nullable().optional(),
@@ -160,6 +161,7 @@ const SEARCH_DOCUMENT_SQL = Prisma.sql`
     COALESCE("extraData"->>'peso', '') || ' ' ||
     COALESCE("extraData"->>'forma_publicacion', '') || ' ' ||
     COALESCE("extraData"->>'observaciones', '') || ' ' ||
+    COALESCE("extraData"->>'compatibilidades', '') || ' ' ||
     COALESCE("extraData"->>'inventario', '') || ' ' ||
     COALESCE("extraData"->>'revision', '') || ' ' ||
     COALESCE("extraData"->>'facebook', '') || ' ' ||
@@ -853,6 +855,7 @@ export async function PATCH(req: Request) {
     peso,
     formaPublicacion,
     observaciones,
+    compatibilidades,
     photos,
     stock,
     price,
@@ -970,6 +973,12 @@ export async function PATCH(req: Request) {
     delete nextExtra.observaciones;
   }
 
+  if (compatibilidades && compatibilidades.trim()) {
+    nextExtra.compatibilidades = compatibilidades.trim();
+  } else if (compatibilidades === null) {
+    delete nextExtra.compatibilidades;
+  }
+
   if (photos !== undefined) {
     const sanitized = photos
       .map((photo) => photo.trim())
@@ -1078,6 +1087,7 @@ export async function PATCH(req: Request) {
         peso: peso ?? null,
         formaPublicacion: formaPublicacion ?? null,
         observaciones: observaciones ?? null,
+        compatibilidades: compatibilidades ?? null,
         skuInternal: skuInternal ?? null,
         stock: stock ?? null,
         price: price ?? null,

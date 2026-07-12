@@ -67,6 +67,7 @@ type InventoryEditFormState = {
   peso: string;
   formaPublicacion: string;
   observaciones: string;
+  compatibilidades: string;
   prestadoVendidoA: string;
 };
 
@@ -221,7 +222,7 @@ const THUMBNAILS_ENABLED = true;
 const NOTIFICATIONS_PAGE_SIZE = 10;
 const NOTIFICATIONS_POLL_INTERVAL_MS = 20_000;
 const TABLE_OVERSCAN_ROWS = 8;
-const INVENTORY_TABLE_COLUMN_COUNT = 33;
+const INVENTORY_TABLE_COLUMN_COUNT = 34;
 const WORKER_SEARCH_MIN_ITEMS = 250;
 const INVENTORY_PAGE_BLOCK_SIZE = 40;
 const INVENTORY_PAGE_CACHE_TTL_MS = 25_000;
@@ -263,6 +264,15 @@ const normalizeFormaPublicacionValue = (value: unknown) => {
   return "";
 };
 
+const normalizeCompatibilidadesText = (value: unknown) => {
+  return (value ?? "")
+    .toString()
+    .replace(/\r\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/\s*,\s*/g, ", ")
+    .trim();
+};
+
 const buildInventorySearchText = (item: Item) => {
   return [
     item.skuInternal,
@@ -285,6 +295,7 @@ const buildInventorySearchText = (item: Item) => {
     item.extraData?.peso ?? "",
     item.extraData?.forma_publicacion ?? "",
     item.extraData?.observaciones ?? "",
+    item.extraData?.compatibilidades ?? "",
     item.extraData?.inventario ?? "",
     item.extraData?.revision ?? "",
     item.extraData?.facebook ?? "",
@@ -699,7 +710,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     ancho: "",
     peso: "",
     formaPublicacion: "",
-    observaciones: ""
+    observaciones: "",
+    compatibilidades: ""
   });
   const [manualNomenclatureGroups, setManualNomenclatureGroups] = useState<ManualNomenclatureGroup[]>([]);
   const [manualNomenclaturePrefixDraft, setManualNomenclaturePrefixDraft] = useState("");
@@ -2263,6 +2275,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         peso: form.peso.trim() || undefined,
         forma_publicacion: normalizeFormaPublicacionValue(form.formaPublicacion) || undefined,
         observaciones: form.observaciones.trim() || undefined,
+        compatibilidades: normalizeCompatibilidadesText(form.compatibilidades) || undefined,
         precio_compra: form.precioCompra ? Number(form.precioCompra) : undefined
       };
 
@@ -2313,7 +2326,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         ancho: "",
         peso: "",
         formaPublicacion: "",
-        observaciones: ""
+        observaciones: "",
+        compatibilidades: ""
       });
       setManualSkuEdited(false);
 
@@ -3550,6 +3564,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       peso: toText(extra.peso),
       formaPublicacion: normalizeFormaPublicacionValue(extra.forma_publicacion),
       observaciones: toText(extra.observaciones),
+      compatibilidades: toText(extra.compatibilidades),
       prestadoVendidoA: toText(extra.prestado_vendido_a).toUpperCase()
     });
   }, []);
@@ -3596,6 +3611,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     const peso = inventoryEditForm.peso.trim();
     const formaPublicacion = normalizeFormaPublicacionValue(inventoryEditForm.formaPublicacion);
     const observaciones = inventoryEditForm.observaciones.trim();
+    const compatibilidades = normalizeCompatibilidadesText(inventoryEditForm.compatibilidades);
     const prestadoVendidoA = inventoryEditForm.prestadoVendidoA.trim().toUpperCase();
     const anoDesde = inventoryEditForm.anoDesde.trim();
     const anoHasta = inventoryEditForm.anoHasta.trim();
@@ -3705,6 +3721,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           peso: peso || null,
           formaPublicacion: formaPublicacion || null,
           observaciones: observaciones || null,
+          compatibilidades: compatibilidades || null,
           pieza: pieza || null,
           stock: stockValue,
           price: priceValue,
@@ -4601,7 +4618,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 </a>
               </div>
             </div>
-            <p className="mt-3 text-sm text-slate-300">Carga manual o importa Excel. Encabezados aceptados: SKU/CODIGO, DESCRIPCION o DESCRIPCION ML o DESCRIPCION LOCAL, PRECIO, INVENTARIO/STOCK/CANTIDAD, CODIGO DE MERCADO LIBRE, CODIGO UNIVERSAL, ESTATUS (active/paused/inactive), ESTATUS INTERNO, ORIGEN, MARCA, COCHE, AÑO DESDE, AÑO HASTA, UBICACION, FACEBOOK, PIEZA, ALTO, LARGO, ANCHO, PESO, FORMA DE PUBLICACION, OBSERVACIONES.</p>
+            <p className="mt-3 text-sm text-slate-300">Carga manual o importa Excel. Encabezados aceptados: SKU/CODIGO, DESCRIPCION o DESCRIPCION ML o DESCRIPCION LOCAL, PRECIO, INVENTARIO/STOCK/CANTIDAD, CODIGO DE MERCADO LIBRE, CODIGO UNIVERSAL, ESTATUS (active/paused/inactive), ESTATUS INTERNO, ORIGEN, MARCA, COCHE, AÑO DESDE, AÑO HASTA, UBICACION, FACEBOOK, PIEZA, ALTO, LARGO, ANCHO, PESO, FORMA DE PUBLICACION, OBSERVACIONES, COMPATIBILIDADES.</p>
           </header>
   {!isManualOnly && (
   <section className="bg-slate-900/70 border border-slate-700 rounded-2xl p-4 shadow space-y-3">
@@ -4937,6 +4954,12 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                         value={form.observaciones}
                         onChange={(e) => setForm((f) => ({ ...f, observaciones: e.target.value }))}
                       />
+                      <input
+                        className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                        placeholder="Compatibilidades (ej: YARIS R 2016-2020, MAZDA 2 2018-2023)"
+                        value={form.compatibilidades}
+                        onChange={(e) => setForm((f) => ({ ...f, compatibilidades: e.target.value }))}
+                      />
 
                       <div className="sm:col-span-3 space-y-3">
                         <div className="flex items-center justify-between text-xs text-slate-400">
@@ -5246,6 +5269,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                                         <span>Peso: {extra.peso ?? "-"}</span>
                                         <span>Forma: {extra.forma_publicacion ?? "-"}</span>
                                         <span>Observaciones: {extra.observaciones ?? "-"}</span>
+                                        <span>Compatibilidades: {extra.compatibilidades ?? "-"}</span>
                                       </div>
                                     </div>
                                   </div>
@@ -5521,7 +5545,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                     {uploadErrors.length > 5 && <div>... y mas ({uploadErrors.length - 5})</div>}
                   </div>
                 )}
-                <p className="text-xs text-slate-400">Encabezados soportados: ESTATUS, DESCRIPCION, DESCRIPCION ML, DESCRIPCION LOCAL, PRECIO, CODIGO, STOCK, CODIGO UNIVERSAL, CODIGO DE MERCADO LIBRE, ESTATUS INTERNO, ORIGEN, MARCA, COCHE, AÑO DESDE, AÑO HASTA, UBICACION, FACEBOOK, PIEZA, ALTO, LARGO, ANCHO, PESO, FORMA DE PUBLICACION, OBSERVACIONES.</p>
+                <p className="text-xs text-slate-400">Encabezados soportados: ESTATUS, DESCRIPCION, DESCRIPCION ML, DESCRIPCION LOCAL, PRECIO, CODIGO, STOCK, CODIGO UNIVERSAL, CODIGO DE MERCADO LIBRE, ESTATUS INTERNO, ORIGEN, MARCA, COCHE, AÑO DESDE, AÑO HASTA, UBICACION, FACEBOOK, PIEZA, ALTO, LARGO, ANCHO, PESO, FORMA DE PUBLICACION, OBSERVACIONES, COMPATIBILIDADES.</p>
               </>
             ) : (
               <p className="text-sm text-slate-400">
@@ -6216,6 +6240,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                     <th className="px-4 py-3 text-left">Peso</th>
                     <th className="px-4 py-3 text-left">Forma publicacion</th>
                     <th className="px-4 py-3 text-left">Observaciones</th>
+                    <th className="px-4 py-3 text-left">Compatibilidades</th>
                     <th className="px-4 py-3 text-left">Prestado/Vendido a</th>
                     <th className="px-4 py-3 text-left">Fecha ingreso</th>
                     <th className="px-4 py-3 text-left">Fecha prestamo</th>
@@ -6514,6 +6539,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                         <td className="px-4 py-3 align-middle text-slate-100">{extra.peso ?? "-"}</td>
                         <td className="px-4 py-3 align-middle text-slate-100">{extra.forma_publicacion ?? "-"}</td>
                         <td className="px-4 py-3 align-middle text-slate-100">{extra.observaciones ?? "-"}</td>
+                        <td className="px-4 py-3 align-middle text-slate-100">{extra.compatibilidades ?? "-"}</td>
                         <td className="px-4 py-3 align-middle text-slate-100">
                           {extra.prestado_vendido_a ?? "-"}
                         </td>
@@ -6759,6 +6785,12 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 placeholder="Observaciones"
                 value={inventoryEditForm.observaciones}
                 onChange={(event) => handleInventoryEditFieldChange("observaciones", event.target.value)}
+              />
+              <input
+                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-amber-400 focus:outline-none"
+                placeholder="Compatibilidades"
+                value={inventoryEditForm.compatibilidades}
+                onChange={(event) => handleInventoryEditFieldChange("compatibilidades", event.target.value)}
               />
               <input
                 className="sm:col-span-2 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-amber-400 focus:outline-none"

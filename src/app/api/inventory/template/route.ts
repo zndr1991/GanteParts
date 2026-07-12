@@ -27,7 +27,8 @@ const HEADERS = [
   "ANCHO",
   "PESO",
   "FORMA DE PUBLICACION",
-  "OBSERVACIONES"
+  "OBSERVACIONES",
+  "COMPATIBILIDADES"
 ];
 
 export async function GET() {
