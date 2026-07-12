@@ -58,6 +58,7 @@ const updateSchema = z.object({
   ubicacion: z.string().optional().nullable(),
   marca: z.string().optional().nullable(),
   coche: z.string().optional().nullable(),
+  version: z.string().optional().nullable(),
   anoDesde: z.string().optional().nullable(),
   anoHasta: z.string().optional().nullable(),
   alto: z.string().optional().nullable(),
@@ -150,6 +151,7 @@ const SEARCH_DOCUMENT_SQL = Prisma.sql`
     COALESCE("extraData"->>'estatus_interno', '') || ' ' ||
     COALESCE("extraData"->>'origen', '') || ' ' ||
     COALESCE("extraData"->>'coche', '') || ' ' ||
+    COALESCE("extraData"->>'version', '') || ' ' ||
     COALESCE("extraData"->>'pieza', '') || ' ' ||
     COALESCE("extraData"->>'marca', '') || ' ' ||
     COALESCE("extraData"->>'ano_desde', '') || ' ' ||
@@ -847,6 +849,7 @@ export async function PATCH(req: Request) {
     ubicacion,
     marca,
     coche,
+    version,
     anoDesde,
     anoHasta,
     alto,
@@ -923,6 +926,12 @@ export async function PATCH(req: Request) {
     nextExtra.coche = coche.trim();
   } else if (coche === null) {
     delete nextExtra.coche;
+  }
+
+  if (version && version.trim()) {
+    nextExtra.version = version.trim();
+  } else if (version === null) {
+    delete nextExtra.version;
   }
 
   if (anoDesde && anoDesde.trim()) {
@@ -1079,6 +1088,7 @@ export async function PATCH(req: Request) {
         ubicacion: ubicacion ?? null,
         marca: marca ?? null,
         coche: coche ?? null,
+        version: version ?? null,
         anoDesde: anoDesde ?? null,
         anoHasta: anoHasta ?? null,
         alto: alto ?? null,

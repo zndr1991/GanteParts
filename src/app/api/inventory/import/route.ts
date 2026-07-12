@@ -55,6 +55,8 @@ const headerMap: Record<string, string> = {
   origen: "extra_origen",
   marca: "extra_marca",
   coche: "extra_coche",
+  version: "extra_version",
+  versiondelcoche: "extra_version",
   anodesde: "extra_ano_desde",
   "año desde": "extra_ano_desde",
   anohasta: "extra_ano_hasta",
@@ -150,6 +152,13 @@ export async function POST(req: Request) {
           const normalizedForma = normalizeFormaPublicacion(value);
           if (normalizedForma) {
             extras[cleanKey] = normalizedForma;
+          }
+          return;
+        }
+        if (cleanKey === "version") {
+          const normalizedVersion = String(value ?? "").trim().toUpperCase();
+          if (normalizedVersion) {
+            extras[cleanKey] = normalizedVersion;
           }
           return;
         }

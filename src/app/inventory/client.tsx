@@ -55,6 +55,7 @@ type InventoryEditFormState = {
   pieza: string;
   marca: string;
   coche: string;
+  version: string;
   anoDesde: string;
   anoHasta: string;
   origen: string;
@@ -222,7 +223,7 @@ const THUMBNAILS_ENABLED = true;
 const NOTIFICATIONS_PAGE_SIZE = 10;
 const NOTIFICATIONS_POLL_INTERVAL_MS = 20_000;
 const TABLE_OVERSCAN_ROWS = 8;
-const INVENTORY_TABLE_COLUMN_COUNT = 34;
+const INVENTORY_TABLE_COLUMN_COUNT = 35;
 const WORKER_SEARCH_MIN_ITEMS = 250;
 const INVENTORY_PAGE_BLOCK_SIZE = 40;
 const INVENTORY_PAGE_CACHE_TTL_MS = 25_000;
@@ -278,6 +279,10 @@ const normalizeCompatibilidadesText = (value: unknown) => {
   return Array.from(new Set(entries)).join(" | ");
 };
 
+const normalizeVehicleVersion = (value: unknown) => {
+  return (value ?? "").toString().trim().toUpperCase().replace(/\s+/g, " ");
+};
+
 const buildInventorySearchText = (item: Item) => {
   return [
     item.skuInternal,
@@ -289,6 +294,7 @@ const buildInventorySearchText = (item: Item) => {
     item.extraData?.estatus_interno ?? "",
     item.extraData?.origen ?? "",
     item.extraData?.coche ?? "",
+    item.extraData?.version ?? "",
     item.extraData?.pieza ?? "",
     item.extraData?.marca ?? "",
     item.extraData?.ano_desde ?? "",
@@ -704,6 +710,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     pieza: "",
     marca: "",
     coche: "",
+    version: "",
     anoDesde: "",
     anoHasta: "",
     origen: "",
@@ -720,6 +727,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   });
   const [manualCompatibilityDraft, setManualCompatibilityDraft] = useState({
     coche: "",
+    version: "",
     anoDesde: "",
     anoHasta: ""
   });
@@ -2249,6 +2257,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
   const addManualCompatibility = useCallback(() => {
     const coche = manualCompatibilityDraft.coche.trim().toUpperCase().replace(/\s+/g, " ");
+    const version = normalizeVehicleVersion(manualCompatibilityDraft.version);
     const anoDesde = Number.parseInt(manualCompatibilityDraft.anoDesde.trim(), 10);
     const anoHasta = Number.parseInt(manualCompatibilityDraft.anoHasta.trim(), 10);
     const isValidYear = (year: number) => Number.isInteger(year) && year >= 1950 && year <= 2100;
@@ -2268,7 +2277,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       return;
     }
 
-    const compatibilityEntry = `${coche} ${anoDesde}-${anoHasta}`;
+    const compatibilityEntry = version ? `${coche} ${version} ${anoDesde}-${anoHasta}` : `${coche} ${anoDesde}-${anoHasta}`;
     const currentEntries = splitCompatibilidadesEntries(form.compatibilidades).map((entry) => entry.toUpperCase());
 
     if (currentEntries.includes(compatibilityEntry)) {
@@ -2278,7 +2287,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
 
     currentEntries.push(compatibilityEntry);
     setForm((current) => ({ ...current, compatibilidades: currentEntries.join(" | ") }));
-    setManualCompatibilityDraft({ coche: "", anoDesde: "", anoHasta: "" });
+    setManualCompatibilityDraft({ coche: "", version: "", anoDesde: "", anoHasta: "" });
   }, [form.compatibilidades, manualCompatibilityDraft]);
 
   const removeManualCompatibility = useCallback((entryToRemove: string) => {
@@ -2317,6 +2326,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         fecha_ingreso: new Date().toISOString(),
         origen: toUpper(form.origen),
         coche: toUpper(form.coche),
+        version: normalizeVehicleVersion(form.version) || undefined,
         pieza: toUpper(form.pieza),
         marca: toUpper(form.marca),
         ano_desde: anoDesdeSafe,
@@ -2368,6 +2378,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         pieza: "",
         marca: "",
         coche: "",
+        version: "",
         anoDesde: "",
         anoHasta: "",
         origen: "",
@@ -2382,7 +2393,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         observaciones: "",
         compatibilidades: ""
       });
-      setManualCompatibilityDraft({ coche: "", anoDesde: "", anoHasta: "" });
+      setManualCompatibilityDraft({ coche: "", version: "", anoDesde: "", anoHasta: "" });
       setManualSkuEdited(false);
 
       const usedPrefix = manualSkuSuggestionPrefix ?? resolvedManualSkuPrefix;
@@ -3610,6 +3621,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       pieza: toText(extra.pieza).toUpperCase(),
       marca: toText(extra.marca).toUpperCase(),
       coche: toText(extra.coche).toUpperCase(),
+      version: normalizeVehicleVersion(extra.version),
       anoDesde: toText(extra.ano_desde),
       anoHasta: toText(extra.ano_hasta),
       origen: toText(extra.origen).toUpperCase(),
@@ -3662,6 +3674,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     const pieza = inventoryEditForm.pieza.trim().toUpperCase();
     const marca = inventoryEditForm.marca.trim().toUpperCase();
     const coche = inventoryEditForm.coche.trim().toUpperCase();
+    const version = normalizeVehicleVersion(inventoryEditForm.version);
     const ubicacion = inventoryEditForm.ubicacion.trim().toUpperCase();
     const alto = inventoryEditForm.alto.trim();
     const largo = inventoryEditForm.largo.trim();
@@ -3771,6 +3784,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           ubicacion: ubicacion || null,
           marca: marca || null,
           coche: coche || null,
+          version: version || null,
           anoDesde: anoDesde || null,
           anoHasta: anoHasta || null,
           alto: alto || null,
@@ -4676,7 +4690,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 </a>
               </div>
             </div>
-            <p className="mt-3 text-sm text-slate-300">Carga manual o importa Excel. Encabezados aceptados: SKU/CODIGO, DESCRIPCION o DESCRIPCION ML o DESCRIPCION LOCAL, PRECIO, INVENTARIO/STOCK/CANTIDAD, CODIGO DE MERCADO LIBRE, CODIGO UNIVERSAL, ESTATUS (active/paused/inactive), ESTATUS INTERNO, ORIGEN, MARCA, COCHE, AÑO DESDE, AÑO HASTA, UBICACION, FACEBOOK, PIEZA, ALTO, LARGO, ANCHO, PESO, FORMA DE PUBLICACION, OBSERVACIONES, COMPATIBILIDADES.</p>
+            <p className="mt-3 text-sm text-slate-300">Carga manual o importa Excel. Encabezados aceptados: SKU/CODIGO, DESCRIPCION o DESCRIPCION ML o DESCRIPCION LOCAL, PRECIO, INVENTARIO/STOCK/CANTIDAD, CODIGO DE MERCADO LIBRE, CODIGO UNIVERSAL, ESTATUS (active/paused/inactive), ESTATUS INTERNO, ORIGEN, MARCA, COCHE, VERSION, AÑO DESDE, AÑO HASTA, UBICACION, FACEBOOK, PIEZA, ALTO, LARGO, ANCHO, PESO, FORMA DE PUBLICACION, OBSERVACIONES, COMPATIBILIDADES.</p>
           </header>
   {!isManualOnly && (
   <section className="bg-slate-900/70 border border-slate-700 rounded-2xl p-4 shadow space-y-3">
@@ -4923,6 +4937,12 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                       />
                       <input
                         className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                        placeholder="Version (ej: HATCHBACK, SEDAN)"
+                        value={form.version}
+                        onChange={(e) => setForm((f) => ({ ...f, version: e.target.value.toUpperCase() }))}
+                      />
+                      <input
+                        className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
                         placeholder="Año desde"
                         type="number"
                         min="1950"
@@ -5016,7 +5036,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                         <div className="flex flex-wrap items-center gap-2">
                           <p className="text-xs text-slate-300">Compatibilidades (opcional)</p>
                         </div>
-                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[2fr_1fr_1fr_auto]">
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[2fr_1.5fr_1fr_1fr_auto]">
                           <input
                             className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
                             placeholder="Coche compatible"
@@ -5026,6 +5046,19 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                                 ...current,
                                 coche: e.target.value.toUpperCase()
                               }))
+                            }
+                            onKeyDown={(event) => {
+                              if (event.key !== "Enter") return;
+                              event.preventDefault();
+                              addManualCompatibility();
+                            }}
+                          />
+                          <input
+                            className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                            placeholder="Version"
+                            value={manualCompatibilityDraft.version}
+                            onChange={(e) =>
+                              setManualCompatibilityDraft((current) => ({ ...current, version: e.target.value.toUpperCase() }))
                             }
                             onKeyDown={(event) => {
                               if (event.key !== "Enter") return;
@@ -5094,7 +5127,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                           </div>
                         ) : (
                           <p className="text-[11px] text-slate-500">
-                            Si no aplica, déjalo vacío. Si aplica, captura coche y años por separado y presiona Agregar compatibilidad.
+                            Si no aplica, déjalo vacio. Si aplica, captura coche, version y anos por separado y presiona Agregar compatibilidad.
                           </p>
                         )}
                       </div>
@@ -5405,6 +5438,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                                         <span>Largo: {extra.largo ?? "-"}</span>
                                         <span>Ancho: {extra.ancho ?? "-"}</span>
                                         <span>Peso: {extra.peso ?? "-"}</span>
+                                        <span>Version: {extra.version ?? "-"}</span>
                                         <span>Forma: {extra.forma_publicacion ?? "-"}</span>
                                         <span>Observaciones: {extra.observaciones ?? "-"}</span>
                                         <span>Compatibilidades: {extra.compatibilidades ?? "-"}</span>
@@ -5683,7 +5717,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                     {uploadErrors.length > 5 && <div>... y mas ({uploadErrors.length - 5})</div>}
                   </div>
                 )}
-                <p className="text-xs text-slate-400">Encabezados soportados: ESTATUS, DESCRIPCION, DESCRIPCION ML, DESCRIPCION LOCAL, PRECIO, CODIGO, STOCK, CODIGO UNIVERSAL, CODIGO DE MERCADO LIBRE, ESTATUS INTERNO, ORIGEN, MARCA, COCHE, AÑO DESDE, AÑO HASTA, UBICACION, FACEBOOK, PIEZA, ALTO, LARGO, ANCHO, PESO, FORMA DE PUBLICACION, OBSERVACIONES, COMPATIBILIDADES.</p>
+                <p className="text-xs text-slate-400">Encabezados soportados: ESTATUS, DESCRIPCION, DESCRIPCION ML, DESCRIPCION LOCAL, PRECIO, CODIGO, STOCK, CODIGO UNIVERSAL, CODIGO DE MERCADO LIBRE, ESTATUS INTERNO, ORIGEN, MARCA, COCHE, VERSION, AÑO DESDE, AÑO HASTA, UBICACION, FACEBOOK, PIEZA, ALTO, LARGO, ANCHO, PESO, FORMA DE PUBLICACION, OBSERVACIONES, COMPATIBILIDADES.</p>
               </>
             ) : (
               <p className="text-sm text-slate-400">
@@ -6358,6 +6392,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                         </button>
                       </div>
                     </th>
+                    <th className="px-4 py-3 text-left">Version</th>
                     <th className="px-4 py-3 text-left">
                       <div className="flex items-center gap-2">
                         <span>Año</span>
@@ -6623,6 +6658,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                             extra.coche ?? "-"
                           )}
                         </td>
+                        <td className="px-4 py-3 align-middle text-slate-100">{extra.version ?? "-"}</td>
                         <td className="px-4 py-3 align-middle text-slate-100">
                           {canEditInventory && isEditing ? (
                             <input
@@ -6830,6 +6866,12 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 value={inventoryEditForm.coche}
                 onChange={(event) => handleInventoryEditFieldChange("coche", event.target.value.toUpperCase())}
                 disabled={!inventoryEditForm.marca && editModelOptions.length > 0}
+              />
+              <input
+                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-amber-400 focus:outline-none"
+                placeholder="Version"
+                value={inventoryEditForm.version}
+                onChange={(event) => handleInventoryEditFieldChange("version", event.target.value.toUpperCase())}
               />
               <input
                 type="number"

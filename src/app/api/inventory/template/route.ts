@@ -16,6 +16,7 @@ const HEADERS = [
   "ORIGEN",
   "MARCA",
   "COCHE",
+  "VERSION",
   "AÑO DESDE",
   "AÑO HASTA",
   "FACEBOOK",
@@ -34,7 +35,7 @@ const HEADERS = [
 export async function GET() {
   const worksheet = XLSX.utils.aoa_to_sheet([HEADERS]);
 
-  // Validaciones de lista (celdas A, I, J, W filas 2-500). MARCA, COCHE y AÑOS quedan libres para capturar nuevas opciones.
+  // Validaciones de lista (celdas A, I, J, X filas 2-500). MARCA, COCHE, VERSION y AÑOS quedan libres para capturar nuevas opciones.
   const dataValidations = [
     {
       type: "list",
@@ -60,8 +61,8 @@ export async function GET() {
     {
       type: "list",
       allowBlank: true,
-      sqref: "W2:W500",
-      ref: "W2:W500",
+      sqref: "X2:X500",
+      ref: "X2:X500",
       formulas: ['"envio gratis,sin envio gratis"']
     }
   ];
