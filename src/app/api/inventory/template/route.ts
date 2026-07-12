@@ -26,13 +26,14 @@ const HEADERS = [
   "LARGO",
   "ANCHO",
   "PESO",
-  "FORMA DE PUBLICACION"
+  "FORMA DE PUBLICACION",
+  "OBSERVACIONES"
 ];
 
 export async function GET() {
   const worksheet = XLSX.utils.aoa_to_sheet([HEADERS]);
 
-  // Validaciones de lista (celdas A, I, J filas 2-500). MARCA, COCHE y AÑOS quedan libres para capturar nuevas opciones.
+  // Validaciones de lista (celdas A, I, J, W filas 2-500). MARCA, COCHE y AÑOS quedan libres para capturar nuevas opciones.
   const dataValidations = [
     {
       type: "list",
@@ -54,6 +55,13 @@ export async function GET() {
       sqref: "J2:J500",
       ref: "J2:J500",
       formulas: ['"NUEVO ORIGINAL,NUEVO ORIGINAL CON DETALLE,TW/GENERICO,TW/GENERICO CON DETALLE,USADO ORIGINAL SANO,USADO ORIGINAL CON DETALLE"']
+    },
+    {
+      type: "list",
+      allowBlank: true,
+      sqref: "W2:W500",
+      ref: "W2:W500",
+      formulas: ['"envio gratis,sin envio gratis"']
     }
   ];
 

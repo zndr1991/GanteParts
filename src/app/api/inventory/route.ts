@@ -43,6 +43,8 @@ const deleteSchema = z.object({
   password: z.string().min(1).optional()
 });
 
+const formaPublicacionSchema = z.union([z.literal("envio gratis"), z.literal("sin envio gratis")]);
+
 const updateSchema = z.object({
   id: z.string().min(1),
   skuInternal: z.string().min(1).optional(),
@@ -62,7 +64,11 @@ const updateSchema = z.object({
   largo: z.string().optional().nullable(),
   ancho: z.string().optional().nullable(),
   peso: z.string().optional().nullable(),
-  formaPublicacion: z.string().optional().nullable(),
+  formaPublicacion: z.preprocess(
+    (value) => (typeof value === "string" ? value.trim().toLowerCase() : value),
+    formaPublicacionSchema.optional().nullable()
+  ),
+  observaciones: z.string().optional().nullable(),
   photos: z.array(z.string().min(1)).max(MAX_ITEM_PHOTOS).optional(),
   stock: z.number().int().min(0).optional(),
   price: z.number().nonnegative().nullable().optional(),
@@ -153,6 +159,7 @@ const SEARCH_DOCUMENT_SQL = Prisma.sql`
     COALESCE("extraData"->>'ancho', '') || ' ' ||
     COALESCE("extraData"->>'peso', '') || ' ' ||
     COALESCE("extraData"->>'forma_publicacion', '') || ' ' ||
+    COALESCE("extraData"->>'observaciones', '') || ' ' ||
     COALESCE("extraData"->>'inventario', '') || ' ' ||
     COALESCE("extraData"->>'revision', '') || ' ' ||
     COALESCE("extraData"->>'facebook', '') || ' ' ||
@@ -845,6 +852,7 @@ export async function PATCH(req: Request) {
     ancho,
     peso,
     formaPublicacion,
+    observaciones,
     photos,
     stock,
     price,
@@ -956,6 +964,12 @@ export async function PATCH(req: Request) {
     delete nextExtra.forma_publicacion;
   }
 
+  if (observaciones && observaciones.trim()) {
+    nextExtra.observaciones = observaciones.trim();
+  } else if (observaciones === null) {
+    delete nextExtra.observaciones;
+  }
+
   if (photos !== undefined) {
     const sanitized = photos
       .map((photo) => photo.trim())
@@ -1063,6 +1077,7 @@ export async function PATCH(req: Request) {
         ancho: ancho ?? null,
         peso: peso ?? null,
         formaPublicacion: formaPublicacion ?? null,
+        observaciones: observaciones ?? null,
         skuInternal: skuInternal ?? null,
         stock: stock ?? null,
         price: price ?? null,

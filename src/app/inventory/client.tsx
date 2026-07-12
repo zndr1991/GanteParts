@@ -66,6 +66,7 @@ type InventoryEditFormState = {
   ancho: string;
   peso: string;
   formaPublicacion: string;
+  observaciones: string;
   prestadoVendidoA: string;
 };
 
@@ -220,7 +221,7 @@ const THUMBNAILS_ENABLED = true;
 const NOTIFICATIONS_PAGE_SIZE = 10;
 const NOTIFICATIONS_POLL_INTERVAL_MS = 20_000;
 const TABLE_OVERSCAN_ROWS = 8;
-const INVENTORY_TABLE_COLUMN_COUNT = 32;
+const INVENTORY_TABLE_COLUMN_COUNT = 33;
 const WORKER_SEARCH_MIN_ITEMS = 250;
 const INVENTORY_PAGE_BLOCK_SIZE = 40;
 const INVENTORY_PAGE_CACHE_TTL_MS = 25_000;
@@ -247,6 +248,21 @@ const normalizeStatusTotals = (value: unknown): Record<string, number> => {
   return normalized;
 };
 
+const normalizeFormaPublicacionValue = (value: unknown) => {
+  const normalized = (value ?? "").toString().trim().toLowerCase();
+  if (!normalized.length) return "";
+  if (normalized === "envio gratis" || normalized === "sin envio gratis") {
+    return normalized;
+  }
+  if (normalized === "premium") {
+    return "envio gratis";
+  }
+  if (normalized === "clasica") {
+    return "sin envio gratis";
+  }
+  return "";
+};
+
 const buildInventorySearchText = (item: Item) => {
   return [
     item.skuInternal,
@@ -268,6 +284,7 @@ const buildInventorySearchText = (item: Item) => {
     item.extraData?.ancho ?? "",
     item.extraData?.peso ?? "",
     item.extraData?.forma_publicacion ?? "",
+    item.extraData?.observaciones ?? "",
     item.extraData?.inventario ?? "",
     item.extraData?.revision ?? "",
     item.extraData?.facebook ?? "",
@@ -346,8 +363,7 @@ const origenOptions = [
 ];
 const sortedOrigenOptions = [...origenOptions].sort();
 
-const formaPublicacionOptions = ["CLASICA", "PREMIUM"];
-const sortedFormaPublicacionOptions = [...formaPublicacionOptions].sort();
+const formaPublicacionOptions = ["envio gratis", "sin envio gratis"];
 
 const nuevoOriginalDescripcion =
   "PIEZA NUEVA ORIGINAL PUEDE QUE TENGA RASPONES DE ALMACENAMIENTO QUE NO AFECTAN EN NADA A SU FUNCIONAMIENTO.\n" +
@@ -682,7 +698,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     largo: "",
     ancho: "",
     peso: "",
-    formaPublicacion: ""
+    formaPublicacion: "",
+    observaciones: ""
   });
   const [manualNomenclatureGroups, setManualNomenclatureGroups] = useState<ManualNomenclatureGroup[]>([]);
   const [manualNomenclaturePrefixDraft, setManualNomenclaturePrefixDraft] = useState("");
@@ -2244,7 +2261,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         largo: form.largo.trim() || undefined,
         ancho: form.ancho.trim() || undefined,
         peso: form.peso.trim() || undefined,
-        forma_publicacion: toUpper(form.formaPublicacion),
+        forma_publicacion: normalizeFormaPublicacionValue(form.formaPublicacion) || undefined,
+        observaciones: form.observaciones.trim() || undefined,
         precio_compra: form.precioCompra ? Number(form.precioCompra) : undefined
       };
 
@@ -2294,7 +2312,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         largo: "",
         ancho: "",
         peso: "",
-        formaPublicacion: ""
+        formaPublicacion: "",
+        observaciones: ""
       });
       setManualSkuEdited(false);
 
@@ -2779,16 +2798,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         .filter((u): u is string => Boolean(u && u.trim()))
         .map((u) => u.toUpperCase())
     )
-  ).sort();
-
-  const formaPublicacionSuggestions = Array.from(
-    new Set([
-      ...sortedFormaPublicacionOptions,
-      ...items
-        .map((item) => item.extraData?.forma_publicacion)
-        .filter((value): value is string => Boolean(value && value.trim()))
-        .map((value) => value.toUpperCase())
-    ])
   ).sort();
 
   const modelOptions = (() => {
@@ -3539,7 +3548,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
       largo: toText(extra.largo),
       ancho: toText(extra.ancho),
       peso: toText(extra.peso),
-      formaPublicacion: toText(extra.forma_publicacion).toUpperCase(),
+      formaPublicacion: normalizeFormaPublicacionValue(extra.forma_publicacion),
+      observaciones: toText(extra.observaciones),
       prestadoVendidoA: toText(extra.prestado_vendido_a).toUpperCase()
     });
   }, []);
@@ -3584,7 +3594,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     const largo = inventoryEditForm.largo.trim();
     const ancho = inventoryEditForm.ancho.trim();
     const peso = inventoryEditForm.peso.trim();
-    const formaPublicacion = inventoryEditForm.formaPublicacion.trim().toUpperCase();
+    const formaPublicacion = normalizeFormaPublicacionValue(inventoryEditForm.formaPublicacion);
+    const observaciones = inventoryEditForm.observaciones.trim();
     const prestadoVendidoA = inventoryEditForm.prestadoVendidoA.trim().toUpperCase();
     const anoDesde = inventoryEditForm.anoDesde.trim();
     const anoHasta = inventoryEditForm.anoHasta.trim();
@@ -3693,6 +3704,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
           ancho: ancho || null,
           peso: peso || null,
           formaPublicacion: formaPublicacion || null,
+          observaciones: observaciones || null,
           pieza: pieza || null,
           stock: stockValue,
           price: priceValue,
@@ -4589,7 +4601,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 </a>
               </div>
             </div>
-            <p className="mt-3 text-sm text-slate-300">Carga manual o importa Excel. Encabezados aceptados: SKU/CODIGO, DESCRIPCION o DESCRIPCION ML o DESCRIPCION LOCAL, PRECIO, INVENTARIO/STOCK/CANTIDAD, CODIGO DE MERCADO LIBRE, CODIGO UNIVERSAL, ESTATUS (active/paused/inactive), ESTATUS INTERNO, ORIGEN, MARCA, COCHE, AÑO DESDE, AÑO HASTA, UBICACION, FACEBOOK, PIEZA, ALTO, LARGO, ANCHO, PESO, FORMA DE PUBLICACION.</p>
+            <p className="mt-3 text-sm text-slate-300">Carga manual o importa Excel. Encabezados aceptados: SKU/CODIGO, DESCRIPCION o DESCRIPCION ML o DESCRIPCION LOCAL, PRECIO, INVENTARIO/STOCK/CANTIDAD, CODIGO DE MERCADO LIBRE, CODIGO UNIVERSAL, ESTATUS (active/paused/inactive), ESTATUS INTERNO, ORIGEN, MARCA, COCHE, AÑO DESDE, AÑO HASTA, UBICACION, FACEBOOK, PIEZA, ALTO, LARGO, ANCHO, PESO, FORMA DE PUBLICACION, OBSERVACIONES.</p>
           </header>
   {!isManualOnly && (
   <section className="bg-slate-900/70 border border-slate-700 rounded-2xl p-4 shadow space-y-3">
@@ -4907,12 +4919,23 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                         value={form.peso}
                         onChange={(e) => setForm((f) => ({ ...f, peso: e.target.value }))}
                       />
+                      <select
+                        className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                        value={form.formaPublicacion}
+                        onChange={(e) => setForm((f) => ({ ...f, formaPublicacion: e.target.value }))}
+                      >
+                        <option value="">Forma de publicacion</option>
+                        {formaPublicacionOptions.map((opt) => (
+                          <option key={opt} value={opt}>
+                            {opt}
+                          </option>
+                        ))}
+                      </select>
                       <input
                         className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
-                        list="forma-publicacion-options"
-                        placeholder="Forma de publicacion"
-                        value={form.formaPublicacion}
-                        onChange={(e) => setForm((f) => ({ ...f, formaPublicacion: e.target.value.toUpperCase() }))}
+                        placeholder="Observaciones"
+                        value={form.observaciones}
+                        onChange={(e) => setForm((f) => ({ ...f, observaciones: e.target.value }))}
                       />
 
                       <div className="sm:col-span-3 space-y-3">
@@ -5107,12 +5130,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                             <option key={pieza} value={pieza} />
                           ))}
                       </datalist>
-                      <datalist id="forma-publicacion-options">
-                        {formaPublicacionSuggestions.map((forma) => (
-                          <option key={forma} value={forma} />
-                        ))}
-                      </datalist>
-
                       <div className="sm:col-span-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3">
                         <div className="grid grid-cols-1 gap-2 sm:grid-cols-[2fr_3fr] sm:items-center">
                           <input
@@ -5228,6 +5245,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                                         <span>Ancho: {extra.ancho ?? "-"}</span>
                                         <span>Peso: {extra.peso ?? "-"}</span>
                                         <span>Forma: {extra.forma_publicacion ?? "-"}</span>
+                                        <span>Observaciones: {extra.observaciones ?? "-"}</span>
                                       </div>
                                     </div>
                                   </div>
@@ -5503,7 +5521,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                     {uploadErrors.length > 5 && <div>... y mas ({uploadErrors.length - 5})</div>}
                   </div>
                 )}
-                <p className="text-xs text-slate-400">Encabezados soportados: ESTATUS, DESCRIPCION, DESCRIPCION ML, DESCRIPCION LOCAL, PRECIO, CODIGO, STOCK, CODIGO UNIVERSAL, CODIGO DE MERCADO LIBRE, ESTATUS INTERNO, ORIGEN, MARCA, COCHE, AÑO DESDE, AÑO HASTA, UBICACION, FACEBOOK, PIEZA, ALTO, LARGO, ANCHO, PESO, FORMA DE PUBLICACION.</p>
+                <p className="text-xs text-slate-400">Encabezados soportados: ESTATUS, DESCRIPCION, DESCRIPCION ML, DESCRIPCION LOCAL, PRECIO, CODIGO, STOCK, CODIGO UNIVERSAL, CODIGO DE MERCADO LIBRE, ESTATUS INTERNO, ORIGEN, MARCA, COCHE, AÑO DESDE, AÑO HASTA, UBICACION, FACEBOOK, PIEZA, ALTO, LARGO, ANCHO, PESO, FORMA DE PUBLICACION, OBSERVACIONES.</p>
               </>
             ) : (
               <p className="text-sm text-slate-400">
@@ -6197,6 +6215,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                     <th className="px-4 py-3 text-left">Ancho</th>
                     <th className="px-4 py-3 text-left">Peso</th>
                     <th className="px-4 py-3 text-left">Forma publicacion</th>
+                    <th className="px-4 py-3 text-left">Observaciones</th>
                     <th className="px-4 py-3 text-left">Prestado/Vendido a</th>
                     <th className="px-4 py-3 text-left">Fecha ingreso</th>
                     <th className="px-4 py-3 text-left">Fecha prestamo</th>
@@ -6494,6 +6513,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                         <td className="px-4 py-3 align-middle text-slate-100">{extra.ancho ?? "-"}</td>
                         <td className="px-4 py-3 align-middle text-slate-100">{extra.peso ?? "-"}</td>
                         <td className="px-4 py-3 align-middle text-slate-100">{extra.forma_publicacion ?? "-"}</td>
+                        <td className="px-4 py-3 align-middle text-slate-100">{extra.observaciones ?? "-"}</td>
                         <td className="px-4 py-3 align-middle text-slate-100">
                           {extra.prestado_vendido_a ?? "-"}
                         </td>
@@ -6722,14 +6742,23 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 value={inventoryEditForm.peso}
                 onChange={(event) => handleInventoryEditFieldChange("peso", event.target.value)}
               />
-              <input
-                list="edit-forma-publicacion-options"
+              <select
                 className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-amber-400 focus:outline-none"
-                placeholder="Forma de publicacion"
                 value={inventoryEditForm.formaPublicacion}
-                onChange={(event) =>
-                  handleInventoryEditFieldChange("formaPublicacion", event.target.value.toUpperCase())
-                }
+                onChange={(event) => handleInventoryEditFieldChange("formaPublicacion", event.target.value)}
+              >
+                <option value="">Forma de publicacion</option>
+                {formaPublicacionOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+              <input
+                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-amber-400 focus:outline-none"
+                placeholder="Observaciones"
+                value={inventoryEditForm.observaciones}
+                onChange={(event) => handleInventoryEditFieldChange("observaciones", event.target.value)}
               />
               <input
                 className="sm:col-span-2 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-amber-400 focus:outline-none"
@@ -6759,12 +6788,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                 <option key={ubicacion} value={ubicacion} />
               ))}
             </datalist>
-            <datalist id="edit-forma-publicacion-options">
-              {formaPublicacionSuggestions.map((forma) => (
-                <option key={forma} value={forma} />
-              ))}
-            </datalist>
-
             {inventoryEditError && <p className="mt-3 text-sm text-rose-300">{inventoryEditError}</p>}
 
             <div className="mt-6 flex flex-wrap justify-end gap-3">

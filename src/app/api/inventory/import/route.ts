@@ -20,6 +20,15 @@ function toNumberSafe(value: any): number | null {
   return num;
 }
 
+function normalizeFormaPublicacion(value: unknown): string {
+  const normalized = (value ?? "").toString().trim().toLowerCase();
+  if (!normalized.length) return "";
+  if (normalized === "envio gratis" || normalized === "sin envio gratis") return normalized;
+  if (normalized === "premium") return "envio gratis";
+  if (normalized === "clasica") return "sin envio gratis";
+  return "";
+}
+
 const headerMap: Record<string, string> = {
   sku: "skuInternal",
   skuinternal: "skuInternal",
@@ -56,6 +65,8 @@ const headerMap: Record<string, string> = {
   peso: "extra_peso",
   formadepublicacion: "extra_forma_publicacion",
   formapublicacion: "extra_forma_publicacion",
+  observaciones: "extra_observaciones",
+  observacion: "extra_observaciones",
   ubicacion: "extra_ubicacion",
   facebook: "extra_facebook",
   descripcionlocal: "extra_descripcion_local",
@@ -133,6 +144,13 @@ export async function POST(req: Request) {
     Object.entries(normalized).forEach(([key, value]) => {
       if (key.startsWith("extra_")) {
         const cleanKey = key.replace("extra_", "");
+        if (cleanKey === "forma_publicacion") {
+          const normalizedForma = normalizeFormaPublicacion(value);
+          if (normalizedForma) {
+            extras[cleanKey] = normalizedForma;
+          }
+          return;
+        }
         extras[cleanKey] = value;
       }
     });
