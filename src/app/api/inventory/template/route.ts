@@ -21,7 +21,12 @@ const HEADERS = [
   "FACEBOOK",
   "UBICACION",
   "DESCRIPCION LOCAL",
-  "PIEZA"
+  "PIEZA",
+  "ALTO",
+  "LARGO",
+  "ANCHO",
+  "PESO",
+  "FORMA DE PUBLICACION"
 ];
 
 export async function GET() {

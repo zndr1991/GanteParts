@@ -58,6 +58,11 @@ const updateSchema = z.object({
   coche: z.string().optional().nullable(),
   anoDesde: z.string().optional().nullable(),
   anoHasta: z.string().optional().nullable(),
+  alto: z.string().optional().nullable(),
+  largo: z.string().optional().nullable(),
+  ancho: z.string().optional().nullable(),
+  peso: z.string().optional().nullable(),
+  formaPublicacion: z.string().optional().nullable(),
   photos: z.array(z.string().min(1)).max(MAX_ITEM_PHOTOS).optional(),
   stock: z.number().int().min(0).optional(),
   price: z.number().nonnegative().nullable().optional(),
@@ -143,6 +148,11 @@ const SEARCH_DOCUMENT_SQL = Prisma.sql`
     COALESCE("extraData"->>'ano_desde', '') || ' ' ||
     COALESCE("extraData"->>'ano_hasta', '') || ' ' ||
     COALESCE("extraData"->>'ubicacion', '') || ' ' ||
+    COALESCE("extraData"->>'alto', '') || ' ' ||
+    COALESCE("extraData"->>'largo', '') || ' ' ||
+    COALESCE("extraData"->>'ancho', '') || ' ' ||
+    COALESCE("extraData"->>'peso', '') || ' ' ||
+    COALESCE("extraData"->>'forma_publicacion', '') || ' ' ||
     COALESCE("extraData"->>'inventario', '') || ' ' ||
     COALESCE("extraData"->>'revision', '') || ' ' ||
     COALESCE("extraData"->>'facebook', '') || ' ' ||
@@ -830,6 +840,11 @@ export async function PATCH(req: Request) {
     coche,
     anoDesde,
     anoHasta,
+    alto,
+    largo,
+    ancho,
+    peso,
+    formaPublicacion,
     photos,
     stock,
     price,
@@ -909,6 +924,36 @@ export async function PATCH(req: Request) {
     nextExtra.ano_hasta = anoHasta.trim();
   } else if (anoHasta === null) {
     delete nextExtra.ano_hasta;
+  }
+
+  if (alto && alto.trim()) {
+    nextExtra.alto = alto.trim();
+  } else if (alto === null) {
+    delete nextExtra.alto;
+  }
+
+  if (largo && largo.trim()) {
+    nextExtra.largo = largo.trim();
+  } else if (largo === null) {
+    delete nextExtra.largo;
+  }
+
+  if (ancho && ancho.trim()) {
+    nextExtra.ancho = ancho.trim();
+  } else if (ancho === null) {
+    delete nextExtra.ancho;
+  }
+
+  if (peso && peso.trim()) {
+    nextExtra.peso = peso.trim();
+  } else if (peso === null) {
+    delete nextExtra.peso;
+  }
+
+  if (formaPublicacion && formaPublicacion.trim()) {
+    nextExtra.forma_publicacion = formaPublicacion.trim();
+  } else if (formaPublicacion === null) {
+    delete nextExtra.forma_publicacion;
   }
 
   if (photos !== undefined) {
@@ -1013,6 +1058,11 @@ export async function PATCH(req: Request) {
         coche: coche ?? null,
         anoDesde: anoDesde ?? null,
         anoHasta: anoHasta ?? null,
+        alto: alto ?? null,
+        largo: largo ?? null,
+        ancho: ancho ?? null,
+        peso: peso ?? null,
+        formaPublicacion: formaPublicacion ?? null,
         skuInternal: skuInternal ?? null,
         stock: stock ?? null,
         price: price ?? null,
