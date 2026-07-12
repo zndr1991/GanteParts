@@ -718,6 +718,11 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     observaciones: "",
     compatibilidades: ""
   });
+  const [manualCompatibilityDraft, setManualCompatibilityDraft] = useState({
+    coche: "",
+    anoDesde: "",
+    anoHasta: ""
+  });
   const [manualNomenclatureGroups, setManualNomenclatureGroups] = useState<ManualNomenclatureGroup[]>([]);
   const [manualNomenclaturePrefixDraft, setManualNomenclaturePrefixDraft] = useState("");
   const [manualNomenclaturePieceDraft, setManualNomenclaturePieceDraft] = useState("");
@@ -2243,24 +2248,15 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
   };
 
   const addManualCompatibility = useCallback(() => {
-    const cocheRaw = window.prompt("Coche compatible (ej: YARIS R)");
-    if (cocheRaw === null) return;
+    const coche = manualCompatibilityDraft.coche.trim().toUpperCase().replace(/\s+/g, " ");
+    const anoDesde = Number.parseInt(manualCompatibilityDraft.anoDesde.trim(), 10);
+    const anoHasta = Number.parseInt(manualCompatibilityDraft.anoHasta.trim(), 10);
+    const isValidYear = (year: number) => Number.isInteger(year) && year >= 1950 && year <= 2100;
 
-    const coche = cocheRaw.trim().toUpperCase().replace(/\s+/g, " ");
     if (!coche.length) {
       setMessage("Debes capturar el coche para agregar compatibilidad");
       return;
     }
-
-    const anoDesdeRaw = window.prompt("Año desde (ej: 2016)");
-    if (anoDesdeRaw === null) return;
-
-    const anoHastaRaw = window.prompt("Año hasta (ej: 2020)");
-    if (anoHastaRaw === null) return;
-
-    const anoDesde = Number.parseInt(anoDesdeRaw.trim(), 10);
-    const anoHasta = Number.parseInt(anoHastaRaw.trim(), 10);
-    const isValidYear = (year: number) => Number.isInteger(year) && year >= 1950 && year <= 2100;
 
     if (!isValidYear(anoDesde) || !isValidYear(anoHasta)) {
       setMessage("Años inválidos en compatibilidad. Usa formato 2016 a 2020.");
@@ -2273,14 +2269,17 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
     }
 
     const compatibilityEntry = `${coche} ${anoDesde}-${anoHasta}`;
-    setForm((current) => {
-      const currentEntries = splitCompatibilidadesEntries(current.compatibilidades).map((entry) => entry.toUpperCase());
-      if (!currentEntries.includes(compatibilityEntry)) {
-        currentEntries.push(compatibilityEntry);
-      }
-      return { ...current, compatibilidades: currentEntries.join(" | ") };
-    });
-  }, []);
+    const currentEntries = splitCompatibilidadesEntries(form.compatibilidades).map((entry) => entry.toUpperCase());
+
+    if (currentEntries.includes(compatibilityEntry)) {
+      setMessage("Esa compatibilidad ya está agregada");
+      return;
+    }
+
+    currentEntries.push(compatibilityEntry);
+    setForm((current) => ({ ...current, compatibilidades: currentEntries.join(" | ") }));
+    setManualCompatibilityDraft({ coche: "", anoDesde: "", anoHasta: "" });
+  }, [form.compatibilidades, manualCompatibilityDraft]);
 
   const removeManualCompatibility = useCallback((entryToRemove: string) => {
     setForm((current) => {
@@ -2383,6 +2382,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
         observaciones: "",
         compatibilidades: ""
       });
+      setManualCompatibilityDraft({ coche: "", anoDesde: "", anoHasta: "" });
       setManualSkuEdited(false);
 
       const usedPrefix = manualSkuSuggestionPrefix ?? resolvedManualSkuPrefix;
@@ -5013,8 +5013,58 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                         onChange={(e) => setForm((f) => ({ ...f, observaciones: e.target.value }))}
                       />
                       <div className="sm:col-span-3 space-y-2 rounded-md border border-slate-700/80 bg-slate-950/40 p-3">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <p className="text-xs text-slate-300">Compatibilidades (opcional)</p>
+                        </div>
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[2fr_1fr_1fr_auto]">
+                          <input
+                            className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                            placeholder="Coche compatible"
+                            value={manualCompatibilityDraft.coche}
+                            onChange={(e) =>
+                              setManualCompatibilityDraft((current) => ({
+                                ...current,
+                                coche: e.target.value.toUpperCase()
+                              }))
+                            }
+                            onKeyDown={(event) => {
+                              if (event.key !== "Enter") return;
+                              event.preventDefault();
+                              addManualCompatibility();
+                            }}
+                          />
+                          <input
+                            type="number"
+                            min="1950"
+                            max="2100"
+                            className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                            placeholder="Año desde"
+                            value={manualCompatibilityDraft.anoDesde}
+                            onChange={(e) =>
+                              setManualCompatibilityDraft((current) => ({ ...current, anoDesde: e.target.value }))
+                            }
+                            onKeyDown={(event) => {
+                              if (event.key !== "Enter") return;
+                              event.preventDefault();
+                              addManualCompatibility();
+                            }}
+                          />
+                          <input
+                            type="number"
+                            min="1950"
+                            max="2100"
+                            className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                            placeholder="Año hasta"
+                            value={manualCompatibilityDraft.anoHasta}
+                            onChange={(e) =>
+                              setManualCompatibilityDraft((current) => ({ ...current, anoHasta: e.target.value }))
+                            }
+                            onKeyDown={(event) => {
+                              if (event.key !== "Enter") return;
+                              event.preventDefault();
+                              addManualCompatibility();
+                            }}
+                          />
                           <button
                             type="button"
                             className="rounded-md border border-amber-400/50 bg-amber-500/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-amber-200 hover:bg-amber-500/20"
@@ -5023,12 +5073,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                             Agregar compatibilidad
                           </button>
                         </div>
-                        <input
-                          className="w-full rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
-                          placeholder="También puedes escribir manualmente (ej: YARIS R 2016-2020 | MAZDA 2 2018-2023)"
-                          value={form.compatibilidades}
-                          onChange={(e) => setForm((f) => ({ ...f, compatibilidades: e.target.value }))}
-                        />
                         {manualCompatibilityEntries.length > 0 ? (
                           <div className="flex flex-wrap gap-2">
                             {manualCompatibilityEntries.map((entry) => (
@@ -5050,7 +5094,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full" }: Invent
                           </div>
                         ) : (
                           <p className="text-[11px] text-slate-500">
-                            Si no aplica, déjalo vacío. Si aplica, usa el botón y te pedirá coche y años.
+                            Si no aplica, déjalo vacío. Si aplica, captura coche y años por separado y presiona Agregar compatibilidad.
                           </p>
                         )}
                       </div>
