@@ -320,6 +320,44 @@ const buildInventorySearchText = (item: Item) => {
     .toLowerCase();
 };
 
+const splitInventorySearchTokens = (value: string) => {
+  const tokens = value
+    .toLowerCase()
+    .split(/[\s,.;:/|\\_-]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length);
+
+  return Array.from(new Set(tokens)).slice(0, 10);
+};
+
+const parseInventorySearchYearToken = (token: string) => {
+  if (!/^\d{4}$/.test(token)) return null;
+  const year = Number.parseInt(token, 10);
+  if (!Number.isFinite(year) || year < 1900 || year > 2100) return null;
+  return year;
+};
+
+const parseInventoryYearValue = (value: unknown) => {
+  const raw = (value ?? "").toString();
+  const match = raw.match(/\d{4}/);
+  if (!match) return null;
+  const year = Number.parseInt(match[0], 10);
+  if (!Number.isFinite(year) || year < 1900 || year > 2100) return null;
+  return year;
+};
+
+const matchesInventoryYearToken = (item: Item, year: number) => {
+  const extra = item.extraData ?? {};
+  const from = parseInventoryYearValue(extra.ano_desde);
+  const to = parseInventoryYearValue(extra.ano_hasta);
+  const normalizedFrom = from ?? to;
+  const normalizedTo = to ?? from;
+  if (normalizedFrom === null || normalizedTo === null) return false;
+  const minYear = Math.min(normalizedFrom, normalizedTo);
+  const maxYear = Math.max(normalizedFrom, normalizedTo);
+  return year >= minYear && year <= maxYear;
+};
+
 const readFileAsDataUrl = (file: File) =>
   new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -3861,6 +3899,15 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
 
   const serverSearchTerm = search.trim();
   const normalizedSearch = serverSearchTerm.toLowerCase();
+  const normalizedSearchTokens = useMemo(() => splitInventorySearchTokens(normalizedSearch), [normalizedSearch]);
+  const normalizedSearchTokenChecks = useMemo(
+    () =>
+      normalizedSearchTokens.map((token) => ({
+        token,
+        year: parseInventorySearchYearToken(token)
+      })),
+    [normalizedSearchTokens]
+  );
   const canUseWorkerSearch = !useServerPagination && items.length >= WORKER_SEARCH_MIN_ITEMS;
 
   useEffect(() => {
@@ -3886,7 +3933,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     const worker = searchWorkerRef.current;
     if (!worker || !canUseWorkerSearch) return;
 
-    if (!normalizedSearch.length) {
+    if (!normalizedSearchTokens.length) {
       setWorkerSearchResult(null);
       setWorkerSearching(false);
       return;
@@ -3902,20 +3949,26 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
       requestId
     };
     worker.postMessage(payload);
-  }, [canUseWorkerSearch, items, normalizedSearch]);
+  }, [canUseWorkerSearch, items, normalizedSearch, normalizedSearchTokens.length]);
 
   const itemById = useMemo(() => {
     return new Map(items.map((item) => [item.id, item]));
   }, [items]);
 
   const fallbackSearchFilteredItems = useMemo(() => {
-    if (!normalizedSearch.length) return items;
-    return items.filter((item) => buildInventorySearchText(item).includes(normalizedSearch));
-  }, [items, normalizedSearch]);
+    if (!normalizedSearchTokenChecks.length) return items;
+    return items.filter((item) => {
+      const searchText = buildInventorySearchText(item);
+      return normalizedSearchTokenChecks.every(({ token, year }) => {
+        if (searchText.includes(token)) return true;
+        return year !== null && matchesInventoryYearToken(item, year);
+      });
+    });
+  }, [items, normalizedSearchTokenChecks]);
 
   const searchFilteredItems = useMemo(() => {
     if (useServerPagination) return items;
-    if (!normalizedSearch.length) return items;
+    if (!normalizedSearchTokenChecks.length) return items;
 
     if (canUseWorkerSearch) {
       if (!workerSearchResult || workerSearchResult.query !== normalizedSearch) {
@@ -3928,10 +3981,13 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     }
 
     return fallbackSearchFilteredItems;
-  }, [items, normalizedSearch, canUseWorkerSearch, workerSearchResult, itemById, fallbackSearchFilteredItems, useServerPagination]);
+  }, [items, normalizedSearch, normalizedSearchTokenChecks.length, canUseWorkerSearch, workerSearchResult, itemById, fallbackSearchFilteredItems, useServerPagination]);
 
   const workerSearchPending =
-    !useServerPagination && canUseWorkerSearch && normalizedSearch.length > 0 && (workerSearching || !workerSearchResult || workerSearchResult.query !== normalizedSearch);
+    !useServerPagination &&
+    canUseWorkerSearch &&
+    normalizedSearchTokenChecks.length > 0 &&
+    (workerSearching || !workerSearchResult || workerSearchResult.query !== normalizedSearch);
 
   const normalizedStatusFilter = statusFilter?.toUpperCase() ?? null;
   const normalizedStatusFilterDraft = statusFilterDraft?.toUpperCase() ?? null;
@@ -3956,7 +4012,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     () => new Set(normalizedPrestadoDebtorFilters),
     [normalizedPrestadoDebtorFilters]
   );
-  const hasActiveInventorySearch = normalizedSearch.length > 0;
+  const hasActiveInventorySearch = normalizedSearchTokenChecks.length > 0;
   const hasActiveInventoryFacets =
     normalizedInventoryMarcaFilter.length > 0 ||
     normalizedInventoryCocheFilter.length > 0 ||

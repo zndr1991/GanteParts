@@ -101,7 +101,25 @@ const parseStatusFilter = (searchParams: URLSearchParams) => {
 const parseSearchFilter = (searchParams: URLSearchParams) => {
   const raw = (searchParams.get("search") ?? "").trim();
   if (!raw.length) return null;
+  if (!splitSearchTokens(raw).length) return null;
   return raw;
+};
+
+const splitSearchTokens = (value: string) => {
+  const tokens = value
+    .toLowerCase()
+    .split(/[\s,.;:/|\\_-]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length);
+
+  return Array.from(new Set(tokens)).slice(0, 10);
+};
+
+const parseSearchYearToken = (token: string) => {
+  if (!/^\d{4}$/.test(token)) return null;
+  const year = Number.parseInt(token, 10);
+  if (!Number.isFinite(year) || year < 1900 || year > 2100) return null;
+  return year;
 };
 
 const normalizeSearchToken = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -174,6 +192,35 @@ const SEARCH_DOCUMENT_SQL = Prisma.sql`
   )
 `;
 
+const YEAR_FROM_SQL = Prisma.sql`
+  CASE
+    WHEN regexp_replace(COALESCE("extraData"->>'ano_desde', ''), '[^0-9]+', '', 'g') ~ '^[0-9]{4}$'
+      THEN regexp_replace(COALESCE("extraData"->>'ano_desde', ''), '[^0-9]+', '', 'g')::int
+    ELSE NULL
+  END
+`;
+
+const YEAR_TO_SQL = Prisma.sql`
+  CASE
+    WHEN regexp_replace(COALESCE("extraData"->>'ano_hasta', ''), '[^0-9]+', '', 'g') ~ '^[0-9]{4}$'
+      THEN regexp_replace(COALESCE("extraData"->>'ano_hasta', ''), '[^0-9]+', '', 'g')::int
+    ELSE NULL
+  END
+`;
+
+const buildYearTokenSql = (year: number) => {
+  const normalizedFromSql = Prisma.sql`COALESCE(${YEAR_FROM_SQL}, ${YEAR_TO_SQL})`;
+  const normalizedToSql = Prisma.sql`COALESCE(${YEAR_TO_SQL}, ${YEAR_FROM_SQL})`;
+
+  return Prisma.sql`
+    OR (
+      ${normalizedFromSql} IS NOT NULL
+      AND ${normalizedToSql} IS NOT NULL
+      AND ${year} BETWEEN LEAST(${normalizedFromSql}, ${normalizedToSql}) AND GREATEST(${normalizedFromSql}, ${normalizedToSql})
+    )
+  `;
+};
+
 const buildStatusFilterSql = (statusFilter: string | null) => {
   if (!statusFilter) return Prisma.empty;
   return Prisma.sql`
@@ -188,46 +235,70 @@ const buildSearchFilterSql = (
   }
 ) => {
   if (!searchFilter) return Prisma.empty;
-  const normalizedToken = normalizeSearchToken(searchFilter);
-  const lowerLikeValue = `%${searchFilter.toLowerCase()}%`;
-  const normalizedLikeValue = normalizedToken.length >= 3 ? `%${normalizedToken}%` : null;
+  const tokens = splitSearchTokens(searchFilter);
+  if (!tokens.length) return Prisma.empty;
 
-  if (isLikelyCodeSearch(searchFilter, normalizedToken)) {
-    const normalizedPrefixValue = `${normalizedToken}%`;
-    return Prisma.sql`
-      AND (
-        replace(replace(replace(lower(coalesce("skuInternal", '')), '-', ''), ' ', ''), '_', '') LIKE ${normalizedPrefixValue}
-        OR replace(replace(replace(lower(coalesce("mlItemId", '')), '-', ''), ' ', ''), '_', '') LIKE ${normalizedPrefixValue}
-        OR replace(replace(replace(lower(coalesce("sellerCustomField", '')), '-', ''), ' ', ''), '_', '') LIKE ${normalizedPrefixValue}
-      )
-    `;
+  if (tokens.length === 1) {
+    const normalizedSingleToken = normalizeSearchToken(tokens[0]);
+    if (isLikelyCodeSearch(tokens[0], normalizedSingleToken)) {
+      const normalizedPrefixValue = `${normalizedSingleToken}%`;
+      return Prisma.sql`
+        AND (
+          replace(replace(replace(lower(coalesce("skuInternal", '')), '-', ''), ' ', ''), '_', '') LIKE ${normalizedPrefixValue}
+          OR replace(replace(replace(lower(coalesce("mlItemId", '')), '-', ''), ' ', ''), '_', '') LIKE ${normalizedPrefixValue}
+          OR replace(replace(replace(lower(coalesce("sellerCustomField", '')), '-', ''), ' ', ''), '_', '') LIKE ${normalizedPrefixValue}
+        )
+      `;
+    }
   }
 
-  const normalizedCodeSql = normalizedLikeValue
-    ? Prisma.sql`
-        OR replace(replace(replace(lower(coalesce("skuInternal", '')), '-', ''), ' ', ''), '_', '') LIKE ${normalizedLikeValue}
-        OR replace(replace(replace(lower(coalesce("mlItemId", '')), '-', ''), ' ', ''), '_', '') LIKE ${normalizedLikeValue}
-        OR replace(replace(replace(lower(coalesce("sellerCustomField", '')), '-', ''), ' ', ''), '_', '') LIKE ${normalizedLikeValue}
-      `
-    : Prisma.empty;
+  const tokenClauses = tokens.map((token) => {
+    const lowerLikeValue = `%${token}%`;
+    const normalizedToken = normalizeSearchToken(token);
+    const normalizedLikeValue = normalizedToken.length >= 3 ? `%${normalizedToken}%` : null;
+    const yearToken = parseSearchYearToken(token);
 
-  if (options?.lightweight) {
+    const normalizedCodeSql = normalizedLikeValue
+      ? Prisma.sql`
+          OR replace(replace(replace(lower(coalesce("skuInternal", '')), '-', ''), ' ', ''), '_', '') LIKE ${normalizedLikeValue}
+          OR replace(replace(replace(lower(coalesce("mlItemId", '')), '-', ''), ' ', ''), '_', '') LIKE ${normalizedLikeValue}
+          OR replace(replace(replace(lower(coalesce("sellerCustomField", '')), '-', ''), ' ', ''), '_', '') LIKE ${normalizedLikeValue}
+        `
+      : Prisma.empty;
+
+    const yearSql = yearToken !== null ? buildYearTokenSql(yearToken) : Prisma.empty;
+
+    if (options?.lightweight) {
+      return Prisma.sql`
+        (
+          lower(COALESCE("skuInternal", '')) LIKE ${lowerLikeValue}
+          OR lower(COALESCE("title", '')) LIKE ${lowerLikeValue}
+          OR lower(COALESCE("mlItemId", '')) LIKE ${lowerLikeValue}
+          OR lower(COALESCE("sellerCustomField", '')) LIKE ${lowerLikeValue}
+          OR lower(COALESCE("extraData"->>'pieza', '')) LIKE ${lowerLikeValue}
+          OR lower(COALESCE("extraData"->>'marca', '')) LIKE ${lowerLikeValue}
+          OR lower(COALESCE("extraData"->>'coche', '')) LIKE ${lowerLikeValue}
+          OR lower(COALESCE("extraData"->>'version', '')) LIKE ${lowerLikeValue}
+          OR lower(COALESCE("extraData"->>'ano_desde', '')) LIKE ${lowerLikeValue}
+          OR lower(COALESCE("extraData"->>'ano_hasta', '')) LIKE ${lowerLikeValue}
+          OR lower(COALESCE("extraData"->>'compatibilidades', '')) LIKE ${lowerLikeValue}
+          ${normalizedCodeSql}
+          ${yearSql}
+        )
+      `;
+    }
+
     return Prisma.sql`
-      AND (
-        lower(COALESCE("skuInternal", '')) LIKE ${lowerLikeValue}
-        OR lower(COALESCE("title", '')) LIKE ${lowerLikeValue}
-        OR lower(COALESCE("mlItemId", '')) LIKE ${lowerLikeValue}
-        OR lower(COALESCE("sellerCustomField", '')) LIKE ${lowerLikeValue}
+      (
+        ${SEARCH_DOCUMENT_SQL} LIKE ${lowerLikeValue}
         ${normalizedCodeSql}
+        ${yearSql}
       )
     `;
-  }
+  });
 
   return Prisma.sql`
-    AND (
-      ${SEARCH_DOCUMENT_SQL} LIKE ${lowerLikeValue}
-      ${normalizedCodeSql}
-    )
+    AND (${Prisma.join(tokenClauses, " AND ")})
   `;
 };
 
