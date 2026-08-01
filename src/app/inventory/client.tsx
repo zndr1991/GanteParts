@@ -145,6 +145,7 @@ type InventoryClientProps = {
   initialPage: InventoryPageResponse;
   userRole: string;
   mode?: "full" | "manual-only";
+  initialStatusFilter?: string | null;
 };
 
 type PhotoEditorTarget =
@@ -685,16 +686,17 @@ const getStatusBadgeClass = (status?: string | null) => {
   }
 };
 
-export function InventoryClient({ initialPage, userRole, mode = "full" }: InventoryClientProps) {
+export function InventoryClient({ initialPage, userRole, mode = "full", initialStatusFilter = null }: InventoryClientProps) {
   const isManualOnly = mode === "manual-only";
+  const normalizedInitialStatusFilter = initialStatusFilter?.trim().toUpperCase() || null;
   const [manualTab, setManualTab] = useState<"capture" | "nomenclatures">("capture");
   const [items, setItems] = useState<Item[]>(initialPage.items);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [searchDraft, setSearchDraft] = useState("");
   const [focusedRowInfo, setFocusedRowInfo] = useState<FocusedInfo | null>(null);
-  const [statusFilter, setStatusFilter] = useState<string | null>(null);
-  const [statusFilterDraft, setStatusFilterDraft] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<string | null>(normalizedInitialStatusFilter);
+  const [statusFilterDraft, setStatusFilterDraft] = useState<string | null>(normalizedInitialStatusFilter);
   const [inventoryMarcaFilter, setInventoryMarcaFilter] = useState("");
   const [inventoryMarcaFilterDraft, setInventoryMarcaFilterDraft] = useState("");
   const [inventoryCocheFilter, setInventoryCocheFilter] = useState("");

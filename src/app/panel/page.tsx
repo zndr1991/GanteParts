@@ -23,6 +23,13 @@ const shortcuts: Shortcut[] = [
     border: "border-emerald-400/40"
   },
   {
+    href: "/inventory/prestadas",
+    title: "Piezas prestadas",
+    description: "Abre inventario filtrado solo con estatus PRESTADO.",
+    accent: "from-sky-500/20 to-sky-500/5",
+    border: "border-sky-400/40"
+  },
+  {
     href: "/inventory/manual",
     title: "Captura manual",
     description: "Dar de alta piezas al instante sin cargar toda la tabla.",
@@ -93,6 +100,12 @@ export default async function PanelPage() {
               Abrir captura manual
             </Link>
             <Link
+              href="/inventory/prestadas"
+              className="rounded-full border border-sky-400/50 px-4 py-2 text-sm font-semibold text-sky-200 hover:bg-sky-500/10"
+            >
+              Ver piezas prestadas
+            </Link>
+            <Link
               href="/public-inventory"
               className="rounded-full border border-cyan-400/50 px-4 py-2 text-sm font-semibold text-cyan-200 hover:bg-cyan-500/10"
             >
@@ -121,7 +134,7 @@ export default async function PanelPage() {
           </div>
         </section>
 
-        <section className="grid gap-4 sm:grid-cols-2">
+        <section className="hidden" aria-hidden="true">
           {visibleShortcuts.map((shortcut) => (
             <Link
               key={shortcut.href}
