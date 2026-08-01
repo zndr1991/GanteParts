@@ -5,7 +5,7 @@ import { serializeInventoryItem } from "@/lib/inventory-serialization";
 import { Prisma } from "@prisma/client";
 import { fetchInventoryItemsSafely } from "@/lib/inventory-safe-load";
 
-const INVENTORY_PAGE_SIZE = 120;
+const INVENTORY_PAGE_SIZE = 40;
 const MAX_INITIAL_PAGE_SIZE = 5000;
 const INVENTORY_INITIAL_LOAD_ENV = Number(
   process.env.INVENTORY_INITIAL_LOAD_LIMIT ?? process.env.INVENTORY_FULL_LOAD_LIMIT ?? `${INVENTORY_PAGE_SIZE}`
@@ -57,15 +57,16 @@ const fetchInventorySnapshot = unstable_cache(
     const where = resolveSnapshotWhere(ownerId);
     const requested = resolveRequestedTake(take);
 
-    const total = await prisma.inventoryItem.count({ where });
-    const statusTotals = await getStatusTotals(ownerId);
+    const [total, statusTotals, safeItems] = await Promise.all([
+      prisma.inventoryItem.count({ where }),
+      getStatusTotals(ownerId),
+      fetchInventoryItemsSafely({
+        where,
+        take: requested
+      })
+    ]);
 
-    const limit = requested > 0 ? Math.min(requested, total) : total;
-
-    const { items, skippedIds } = await fetchInventoryItemsSafely({
-      where,
-      take: limit
-    });
+    const { items, skippedIds } = safeItems;
 
     if (skippedIds.length) {
       console.error(`Inventory snapshot omitio ${skippedIds.length} registros con texto invalido`);

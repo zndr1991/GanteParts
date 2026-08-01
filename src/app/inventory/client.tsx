@@ -820,6 +820,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   const localEstatusInternoRef = useRef(
     new Map<string, { value: string; updatedAt: number; prestadoVendidoA?: string | null }>()
   );
+  const hasRenderableRowsRef = useRef(initialPage.items.length > 0);
   const [isMobile, setIsMobile] = useState(false);
   const [totalItems, setTotalItems] = useState(initialPage.total);
   const [statusTotals, setStatusTotals] = useState<Record<string, number>>(
@@ -874,6 +875,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   useEffect(() => {
     prestadoMetricsRef.current = prestadoMetrics;
   }, [prestadoMetrics]);
+
+  useEffect(() => {
+    hasRenderableRowsRef.current = items.length > 0;
+  }, [items]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -1239,7 +1244,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
       options.cocheFilter.trim().length > 0 ||
       options.piezaFilter.trim().length > 0 ||
       options.prestadoDebtorFilters.length > 0;
-    const shouldShowBlockingLoader = !hasInteractiveFilters && options.page === 1;
+    const shouldShowBlockingLoader = !hasInteractiveFilters && options.page === 1 && !hasRenderableRowsRef.current;
 
     if (shouldShowBlockingLoader) {
       loadingPageTimeoutRef.current = setTimeout(() => {
