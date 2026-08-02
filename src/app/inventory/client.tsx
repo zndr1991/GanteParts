@@ -913,7 +913,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   const [inventoryRefreshing, setInventoryRefreshing] = useState(false);
   const [inventoryPage, setInventoryPage] = useState(1);
   const [inventoryReloadSeq, setInventoryReloadSeq] = useState(0);
-  const [debouncedServerSearchTerm, setDebouncedServerSearchTerm] = useState("");
   const [tableScrollRowStart, setTableScrollRowStart] = useState(0);
   const [sectionVisibility, setSectionVisibility] = useState<Record<SectionKey, boolean>>({
     notifications: false,
@@ -3955,10 +3954,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   const canUseWorkerSearch = !useServerPagination && items.length >= WORKER_SEARCH_MIN_ITEMS;
 
   useEffect(() => {
-    setDebouncedServerSearchTerm(serverSearchTerm);
-  }, [serverSearchTerm]);
-
-  useEffect(() => {
     const worker = searchWorkerRef.current;
     if (!worker || !canUseWorkerSearch) {
       setWorkerSearchResult(null);
@@ -4088,7 +4083,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   const clearInventoryFilters = useCallback(() => {
     setSearchDraft("");
     setSearch("");
-    setDebouncedServerSearchTerm("");
     lastServerFilterRequestSignatureRef.current = null;
     setStatusFilter(null);
     setStatusFilterDraft(null);
@@ -4120,7 +4114,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     }
 
     setSearch(nextSearch);
-    setDebouncedServerSearchTerm(nextSearch);
     lastServerFilterRequestSignatureRef.current = null;
     setStatusFilter(nextStatus);
     setInventoryMarcaFilter(nextMarcaFilter);
@@ -4147,7 +4140,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     if (!search.length && !searchDraft.length) return;
     setSearch("");
     setSearchDraft("");
-    setDebouncedServerSearchTerm("");
     lastServerFilterRequestSignatureRef.current = null;
     setInventoryPage(1);
   }, [search, searchDraft]);
@@ -4180,19 +4172,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   useEffect(() => {
     setSearchDraft(search);
   }, [search]);
-
-  // Auto-aplicar texto 400ms después de dejar de teclear
-  useEffect(() => {
-    const trimmedDraft = searchDraft.trim();
-    if (trimmedDraft === search) return;
-    const id = setTimeout(() => {
-      setSearch(trimmedDraft);
-      setDebouncedServerSearchTerm(trimmedDraft);
-      lastServerFilterRequestSignatureRef.current = null;
-      setInventoryPage(1);
-    }, 400);
-    return () => clearTimeout(id);
-  }, [searchDraft, search]);
 
   useEffect(() => {
     setStatusFilterDraft(statusFilter);
@@ -5900,7 +5879,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                 ) : hybridLocalMode ? (
                   <p className="mt-1 text-emerald-300">Busqueda local instantanea activa</p>
                 ) : (
-                  <p className="mt-1 text-slate-500">Escribe para filtrar automaticamente</p>
+                  <p className="mt-1 text-slate-500">Escribe y pulsa Aplicar filtros para buscar</p>
                 )}
               </div>
             </div>
