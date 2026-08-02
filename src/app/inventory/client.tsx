@@ -5893,7 +5893,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                 ) : hybridLocalMode ? (
                   <p className="mt-1 text-emerald-300">Busqueda local instantanea activa</p>
                 ) : (
-                  <p className="mt-1 text-slate-500">Escribe y pulsa Buscar para filtrar</p>
+                  <p className="mt-1 text-slate-500">Escribe para filtrar automaticamente</p>
                 )}
               </div>
             </div>

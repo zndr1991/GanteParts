@@ -672,7 +672,7 @@ export async function GET(req: Request) {
             ("extraData" - 'photos') AS "extraData",
             COALESCE(
               CASE
-                WHEN jsonb_typeof("extraData"->>'photos') = 'array' THEN jsonb_array_length("extraData"->'photos')
+                WHEN jsonb_typeof("extraData"->'photos') = 'array' THEN jsonb_array_length("extraData"->'photos')
                 ELSE 0
               END,
               0
