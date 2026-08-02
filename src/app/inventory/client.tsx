@@ -929,8 +929,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   const canImportInventory = canEditInventory;
   const canManageMercadoLibre = canEditInventory;
   const thumbnailsActive = THUMBNAILS_ENABLED;
-  const canAutoEnableHybridLocal = !isManualOnly;
-  const useServerPagination = !isManualOnly && !hybridLocalMode;
+  const canAutoEnableHybridLocal = false;
+  const useServerPagination = !isManualOnly;
 
   useEffect(() => {
     statusTotalsRef.current = statusTotals;

@@ -126,9 +126,11 @@ const normalizeSearchToken = (value: string) => value.toLowerCase().replace(/[^a
 
 const isLikelyCodeSearch = (rawValue: string, normalizedToken: string) => {
   if (normalizedToken.length < 3) return false;
-  if (rawValue.length > 48) return false;
-  if (/\s/.test(rawValue)) return false;
-  return /[0-9]/.test(rawValue) && /[a-z]/i.test(rawValue);
+  const compactRawValue = rawValue.replace(/[\s._-]+/g, "");
+  if (compactRawValue.length > 48) return false;
+  const wordCount = rawValue.trim().split(/\s+/).filter((token) => token.length).length;
+  if (wordCount > 3) return false;
+  return /[0-9]/.test(normalizedToken) && /[a-z]/i.test(normalizedToken);
 };
 
 const parseFacetFilter = (searchParams: URLSearchParams, key: "marcaFilter" | "cocheFilter" | "piezaFilter") => {
@@ -158,6 +160,7 @@ const parseIncludeMeta = (searchParams: URLSearchParams) => {
   return raw === "1" || raw === "true" || raw === "yes";
 };
 
+// Debe mantenerse alineado con el índice trigram InventoryItem_search_document_trgm_idx.
 const SEARCH_DOCUMENT_SQL = Prisma.sql`
   lower(
     COALESCE("skuInternal", '') || ' ' ||
@@ -169,19 +172,11 @@ const SEARCH_DOCUMENT_SQL = Prisma.sql`
     COALESCE("extraData"->>'estatus_interno', '') || ' ' ||
     COALESCE("extraData"->>'origen', '') || ' ' ||
     COALESCE("extraData"->>'coche', '') || ' ' ||
-    COALESCE("extraData"->>'version', '') || ' ' ||
     COALESCE("extraData"->>'pieza', '') || ' ' ||
     COALESCE("extraData"->>'marca', '') || ' ' ||
     COALESCE("extraData"->>'ano_desde', '') || ' ' ||
     COALESCE("extraData"->>'ano_hasta', '') || ' ' ||
     COALESCE("extraData"->>'ubicacion', '') || ' ' ||
-    COALESCE("extraData"->>'alto', '') || ' ' ||
-    COALESCE("extraData"->>'largo', '') || ' ' ||
-    COALESCE("extraData"->>'ancho', '') || ' ' ||
-    COALESCE("extraData"->>'peso', '') || ' ' ||
-    COALESCE("extraData"->>'forma_publicacion', '') || ' ' ||
-    COALESCE("extraData"->>'observaciones', '') || ' ' ||
-    COALESCE("extraData"->>'compatibilidades', '') || ' ' ||
     COALESCE("extraData"->>'inventario', '') || ' ' ||
     COALESCE("extraData"->>'revision', '') || ' ' ||
     COALESCE("extraData"->>'facebook', '') || ' ' ||
@@ -228,28 +223,29 @@ const buildStatusFilterSql = (statusFilter: string | null) => {
   `;
 };
 
-const buildSearchFilterSql = (
-  searchFilter: string | null,
-  options?: {
-    lightweight?: boolean;
-  }
-) => {
+const NORMALIZED_SKU_SQL = Prisma.sql`replace(replace(replace(lower(coalesce("skuInternal", '')), '-', ''), ' ', ''), '_', '')`;
+const NORMALIZED_ML_SQL = Prisma.sql`replace(replace(replace(lower(coalesce("mlItemId", '')), '-', ''), ' ', ''), '_', '')`;
+const NORMALIZED_SELLER_SQL = Prisma.sql`replace(replace(replace(lower(coalesce("sellerCustomField", '')), '-', ''), ' ', ''), '_', '')`;
+
+const buildSearchFilterSql = (searchFilter: string | null, options?: { lightweight?: boolean }) => {
   if (!searchFilter) return Prisma.empty;
   const tokens = splitSearchTokens(searchFilter);
   if (!tokens.length) return Prisma.empty;
 
-  if (tokens.length === 1) {
-    const normalizedSingleToken = normalizeSearchToken(tokens[0]);
-    if (isLikelyCodeSearch(tokens[0], normalizedSingleToken)) {
-      const normalizedPrefixValue = `${normalizedSingleToken}%`;
-      return Prisma.sql`
-        AND (
-          replace(replace(replace(lower(coalesce("skuInternal", '')), '-', ''), ' ', ''), '_', '') LIKE ${normalizedPrefixValue}
-          OR replace(replace(replace(lower(coalesce("mlItemId", '')), '-', ''), ' ', ''), '_', '') LIKE ${normalizedPrefixValue}
-          OR replace(replace(replace(lower(coalesce("sellerCustomField", '')), '-', ''), ' ', ''), '_', '') LIKE ${normalizedPrefixValue}
-        )
-      `;
-    }
+  const normalizedRawToken = normalizeSearchToken(searchFilter);
+  if (isLikelyCodeSearch(searchFilter, normalizedRawToken)) {
+    const normalizedExactValue = normalizedRawToken;
+    const normalizedPrefixValue = `${normalizedRawToken}%`;
+    return Prisma.sql`
+      AND (
+        ${NORMALIZED_SKU_SQL} = ${normalizedExactValue}
+        OR ${NORMALIZED_ML_SQL} = ${normalizedExactValue}
+        OR ${NORMALIZED_SELLER_SQL} = ${normalizedExactValue}
+        OR ${NORMALIZED_SKU_SQL} LIKE ${normalizedPrefixValue}
+        OR ${NORMALIZED_ML_SQL} LIKE ${normalizedPrefixValue}
+        OR ${NORMALIZED_SELLER_SQL} LIKE ${normalizedPrefixValue}
+      )
+    `;
   }
 
   const tokenClauses = tokens.map((token) => {
@@ -260,15 +256,17 @@ const buildSearchFilterSql = (
 
     const normalizedCodeSql = normalizedLikeValue
       ? Prisma.sql`
-          OR replace(replace(replace(lower(coalesce("skuInternal", '')), '-', ''), ' ', ''), '_', '') LIKE ${normalizedLikeValue}
-          OR replace(replace(replace(lower(coalesce("mlItemId", '')), '-', ''), ' ', ''), '_', '') LIKE ${normalizedLikeValue}
-          OR replace(replace(replace(lower(coalesce("sellerCustomField", '')), '-', ''), ' ', ''), '_', '') LIKE ${normalizedLikeValue}
+          OR ${NORMALIZED_SKU_SQL} LIKE ${normalizedLikeValue}
+          OR ${NORMALIZED_ML_SQL} LIKE ${normalizedLikeValue}
+          OR ${NORMALIZED_SELLER_SQL} LIKE ${normalizedLikeValue}
         `
       : Prisma.empty;
 
     const yearSql = yearToken !== null ? buildYearTokenSql(yearToken) : Prisma.empty;
 
-    if (options?.lightweight) {
+    const isShortToken = token.length <= 2 && yearToken === null;
+
+    if (options?.lightweight || isShortToken) {
       return Prisma.sql`
         (
           lower(COALESCE("skuInternal", '')) LIKE ${lowerLikeValue}
@@ -644,7 +642,9 @@ export async function GET(req: Request) {
     const includeMeta = parseIncludeMeta(searchParams);
     const searchTokens = searchFilter ? splitSearchTokens(searchFilter) : [];
     const shouldUseLightweightSearch =
-      !includeMeta && searchTokens.length > 0 && searchTokens.some((token) => token.length <= 2);
+      !includeMeta &&
+      searchTokens.length > 0 &&
+      searchTokens.some((token) => token.length <= 2 && parseSearchYearToken(token) === null);
 
     const ownerSql = ownerId ? Prisma.sql`AND "ownerId" = ${ownerId}` : Prisma.empty;
     const statusSql = buildStatusFilterSql(statusFilter);
