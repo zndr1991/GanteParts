@@ -230,7 +230,7 @@ const INVENTORY_PAGE_BLOCK_SIZE = 40;
 const INVENTORY_PAGE_CACHE_TTL_MS = 25_000;
 const INVENTORY_LOADING_INDICATOR_DELAY_MS = 180;
 const MANUAL_SKU_NUMBER_PADDING = 5;
-const HYBRID_LOCAL_AUTOLOAD_DELAY_MS = 2500;
+const HYBRID_LOCAL_AUTOLOAD_DELAY_MS = 350;
 
 const makePhotoKey = (file: File) => `${file.name}-${file.size}-${file.lastModified}`;
 
@@ -930,8 +930,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   const canImportInventory = canEditInventory;
   const canManageMercadoLibre = canEditInventory;
   const thumbnailsActive = THUMBNAILS_ENABLED;
-  const canAutoEnableHybridLocal = false;
-  const useServerPagination = !isManualOnly;
+  const canAutoEnableHybridLocal = !isManualOnly;
+  const useServerPagination = !isManualOnly && !hybridLocalMode;
 
   useEffect(() => {
     statusTotalsRef.current = statusTotals;
@@ -1455,6 +1455,11 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   const loadAllInventoryForHybrid = useCallback(async (options?: { force?: boolean }) => {
     if (isManualOnly) return false;
     if (!options?.force && !canAutoEnableHybridLocal) return false;
+
+    if (inventoryRequestAbortRef.current) {
+      inventoryRequestAbortRef.current.abort();
+      inventoryRequestAbortRef.current = null;
+    }
 
     if (hybridLoadAbortRef.current) {
       hybridLoadAbortRef.current.abort();
