@@ -180,6 +180,8 @@ type InventorySearchWorkerResultMessage = {
   ids: string[];
 };
 
+type InventoryPageSizeOption = 100 | 200 | 500 | "ALL";
+
 const brandOptions = [
   "ACURA",
   "AUDI",
@@ -226,7 +228,8 @@ const NOTIFICATIONS_POLL_INTERVAL_MS = 20_000;
 const TABLE_OVERSCAN_ROWS = 8;
 const INVENTORY_TABLE_COLUMN_COUNT = 35;
 const WORKER_SEARCH_MIN_ITEMS = 250;
-const INVENTORY_PAGE_BLOCK_SIZE = 100;
+const INVENTORY_PAGE_BLOCK_SIZE_DEFAULT = 100;
+const INVENTORY_PAGE_BLOCK_SIZE_ALL_REQUEST = 5000;
 const INVENTORY_PAGE_CACHE_TTL_MS = 25_000;
 const INVENTORY_LOADING_INDICATOR_DELAY_MS = 180;
 const MANUAL_SKU_NUMBER_PADDING = 5;
@@ -592,6 +595,7 @@ const normalizeFacetOptions = (value: unknown): InventoryFacetOptions => {
 
 const buildInventoryPageCacheKey = (options: {
   page: number;
+  pageSize: number;
   search: string;
   statusFilter: string | null;
   marcaFilter: string;
@@ -611,6 +615,7 @@ const buildInventoryPageCacheKey = (options: {
 
   return JSON.stringify({
     page: Math.max(1, options.page),
+    pageSize: Math.max(1, options.pageSize),
     search: options.search.trim(),
     statusFilter: options.statusFilter?.trim().toUpperCase() || null,
     marcaFilter: options.marcaFilter.trim().toUpperCase(),
@@ -912,6 +917,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   const [loadingPage, setLoadingPage] = useState(false);
   const [inventoryRefreshing, setInventoryRefreshing] = useState(false);
   const [inventoryPage, setInventoryPage] = useState(1);
+  const [inventoryPageSize, setInventoryPageSize] = useState<InventoryPageSizeOption>(INVENTORY_PAGE_BLOCK_SIZE_DEFAULT);
   const [inventoryReloadSeq, setInventoryReloadSeq] = useState(0);
   const [tableScrollRowStart, setTableScrollRowStart] = useState(0);
   const [sectionVisibility, setSectionVisibility] = useState<Record<SectionKey, boolean>>({
@@ -1232,6 +1238,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
 
   const fetchInventoryPage = useCallback(async (options: {
     page: number;
+    pageSize: number;
     search: string;
     statusFilter: string | null;
     marcaFilter: string;
@@ -1266,6 +1273,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     const includeFacetOptions = includeMeta && Boolean(options.includeFacetOptions);
     const cacheKey = buildInventoryPageCacheKey({
       page: options.page,
+      pageSize: options.pageSize,
       search: options.search,
       statusFilter: options.statusFilter,
       marcaFilter: options.marcaFilter,
@@ -1326,7 +1334,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     try {
       const params = new URLSearchParams({
         page: String(Math.max(1, options.page)),
-        pageSize: String(INVENTORY_PAGE_BLOCK_SIZE)
+        pageSize: String(options.pageSize)
       });
 
       const searchValue = options.search.trim();
@@ -4072,6 +4080,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     normalizedInventoryCocheFilterDraft !== normalizedInventoryCocheFilter ||
     normalizedInventoryPiezaFilterDraft !== normalizedInventoryPiezaFilter;
   const canShowAllInventory = hasAnyInventoryFiltersActive || hasAnyDraftInventoryFilters;
+  const inventoryRequestPageSize =
+    inventoryPageSize === "ALL" ? INVENTORY_PAGE_BLOCK_SIZE_ALL_REQUEST : inventoryPageSize;
   const activeInventoryFilterCount =
     Number(hasActiveInventorySearch) +
     Number(Boolean(normalizedStatusFilter)) +
@@ -4231,6 +4241,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
 
     void fetchInventoryPage({
       page: inventoryPage,
+      pageSize: inventoryRequestPageSize,
       search: effectiveServerSearchTerm,
       statusFilter: normalizedStatusFilter,
       marcaFilter: normalizedInventoryMarcaFilter,
@@ -4250,6 +4261,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     normalizedInventoryPiezaFilter,
     normalizedPrestadoDebtorFilters,
     normalizedStatusFilter,
+    inventoryRequestPageSize,
     search,
     hybridLocalHydrating,
     useServerPagination
@@ -4572,12 +4584,19 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     return sorted;
   }, [facetedFilteredItems, sortConfig, getItemPieceName, getItemYearLabel]);
 
+  const effectiveInventoryPageSize =
+    inventoryPageSize === "ALL"
+      ? useServerPagination
+        ? Math.max(1, totalItems || items.length || 1)
+        : Math.max(1, filteredItems.length || 1)
+      : inventoryPageSize;
+
   const filteredTotalPages = useMemo(() => {
     if (useServerPagination) {
-      return Math.max(1, Math.ceil(totalItems / INVENTORY_PAGE_BLOCK_SIZE));
+      return Math.max(1, Math.ceil(totalItems / effectiveInventoryPageSize));
     }
-    return Math.max(1, Math.ceil(filteredItems.length / INVENTORY_PAGE_BLOCK_SIZE));
-  }, [filteredItems.length, totalItems, useServerPagination]);
+    return Math.max(1, Math.ceil(filteredItems.length / effectiveInventoryPageSize));
+  }, [effectiveInventoryPageSize, filteredItems.length, totalItems, useServerPagination]);
 
   useEffect(() => {
     setInventoryPage(1);
@@ -4597,16 +4616,16 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
 
   const paginatedFilteredItems = useMemo(() => {
     if (useServerPagination) return filteredItems;
-    const start = (inventoryPage - 1) * INVENTORY_PAGE_BLOCK_SIZE;
-    return filteredItems.slice(start, start + INVENTORY_PAGE_BLOCK_SIZE);
-  }, [filteredItems, inventoryPage, useServerPagination]);
+    const start = (inventoryPage - 1) * effectiveInventoryPageSize;
+    return filteredItems.slice(start, start + effectiveInventoryPageSize);
+  }, [effectiveInventoryPageSize, filteredItems, inventoryPage, useServerPagination]);
   const shouldVirtualizeDesktop = paginatedFilteredItems.length > 60;
 
   const visibleBaseTotal = useServerPagination ? totalItems : filteredItems.length;
   const paginatedVisibleStart = visibleBaseTotal
-    ? (inventoryPage - 1) * INVENTORY_PAGE_BLOCK_SIZE + 1
+    ? (inventoryPage - 1) * effectiveInventoryPageSize + 1
     : 0;
-  const paginatedVisibleEnd = Math.min(inventoryPage * INVENTORY_PAGE_BLOCK_SIZE, visibleBaseTotal);
+  const paginatedVisibleEnd = Math.min(inventoryPage * effectiveInventoryPageSize, visibleBaseTotal);
 
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
 
@@ -6227,6 +6246,32 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                     Página {inventoryPage} de {filteredTotalPages} · registros {paginatedVisibleStart}-{paginatedVisibleEnd}
                   </span>
                   <div className="flex items-center gap-2">
+                    <label className="flex items-center gap-2 rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-xs text-slate-300">
+                      <span>Por página</span>
+                      <select
+                        value={String(inventoryPageSize)}
+                        onChange={(event) => {
+                          const rawValue = event.target.value;
+                          const nextPageSize: InventoryPageSizeOption =
+                            rawValue === "ALL" ? "ALL" : (Number(rawValue) as InventoryPageSizeOption);
+                          if (nextPageSize === inventoryPageSize) return;
+
+                          setInventoryPageSize(nextPageSize);
+                          setInventoryPage(1);
+                          inventoryPageCacheRef.current.clear();
+                          lastServerFilterRequestSignatureRef.current = null;
+                          if (useServerPagination) {
+                            setInventoryReloadSeq((current) => current + 1);
+                          }
+                        }}
+                        className="rounded bg-slate-900 px-2 py-1 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
+                      >
+                        <option value="100">100</option>
+                        <option value="200">200</option>
+                        <option value="500">500</option>
+                        <option value="ALL">TODO</option>
+                      </select>
+                    </label>
                     <button
                       type="button"
                       onClick={() => setInventoryPage(1)}
