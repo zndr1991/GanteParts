@@ -4654,6 +4654,23 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     });
   }, [items, statusTotals, totalItems]);
 
+  const statusCounterMap = useMemo(() => {
+    const map = new Map<string, number>();
+    statusCounters.forEach(([label, count]) => {
+      map.set(label, count);
+    });
+    return map;
+  }, [statusCounters]);
+
+  const inventoryStatusFilterOptions = useMemo(() => {
+    const values = new Set<string>(["SIN ESTATUS", ...sortedEstatusInternoOptions]);
+    statusCounters.forEach(([label]) => {
+      values.add(label);
+    });
+
+    return Array.from(values).sort((a, b) => a.localeCompare(b, "es"));
+  }, [statusCounters]);
+
   const prestadoSummary = useMemo(() => {
     if (normalizedStatusFilter !== "PRESTADO") return null;
     if (prestadoMetrics) return prestadoMetrics;
@@ -5853,7 +5870,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
               </div>
             </div>
 
-            <div className={`mt-3 grid grid-cols-1 gap-2 ${normalizedStatusFilter === "PRESTADO" ? "xl:grid-cols-5" : "xl:grid-cols-4"}`}>
+            <div className={`mt-3 grid grid-cols-1 gap-2 ${normalizedStatusFilter === "PRESTADO" ? "xl:grid-cols-6" : "xl:grid-cols-5"}`}>
               <form
                 className="xl:col-span-2 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto_auto]"
                 onSubmit={(event) => {
@@ -5884,6 +5901,26 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                   Mostrar todo
                 </button>
               </form>
+
+              <select
+                value={statusFilterDraft ?? ""}
+                onChange={(event) => {
+                  const nextValue = event.target.value.trim().toUpperCase();
+                  setStatusFilterDraft(nextValue.length ? nextValue : null);
+                }}
+                className="rounded-xl bg-slate-900 border border-slate-700 px-3 py-2.5 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
+              >
+                <option value="">Estatus interno (todos)</option>
+                {inventoryStatusFilterOptions.map((statusOption) => {
+                  const count = statusCounterMap.get(statusOption);
+                  const label = typeof count === "number" ? `${statusOption} (${count})` : statusOption;
+                  return (
+                    <option key={statusOption} value={statusOption}>
+                      {label}
+                    </option>
+                  );
+                })}
+              </select>
 
               <select
                 value={inventoryMarcaFilterDraft}

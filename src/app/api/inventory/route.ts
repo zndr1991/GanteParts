@@ -627,10 +627,13 @@ export async function GET(req: Request) {
     const prestadoDebtorFilters = parsePrestadoDebtorFilters(searchParams);
     const includeFacetOptions = parseIncludeFacetOptions(searchParams);
     const includeMeta = parseIncludeMeta(searchParams);
+    const searchTokens = searchFilter ? splitSearchTokens(searchFilter) : [];
+    const shouldUseLightweightSearch =
+      !includeMeta && searchTokens.length > 0 && searchTokens.some((token) => token.length <= 2);
 
     const ownerSql = ownerId ? Prisma.sql`AND "ownerId" = ${ownerId}` : Prisma.empty;
     const statusSql = buildStatusFilterSql(statusFilter);
-    const searchSql = buildSearchFilterSql(searchFilter, { lightweight: !includeMeta });
+    const searchSql = buildSearchFilterSql(searchFilter, { lightweight: shouldUseLightweightSearch });
     const marcaSql = buildMarcaFilterSql(marcaFilter);
     const cocheSql = buildCocheFilterSql(cocheFilter);
     const piezaSql = buildPiezaFilterSql(piezaFilter);
