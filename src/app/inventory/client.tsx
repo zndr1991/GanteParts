@@ -4211,8 +4211,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     if (!useServerPagination) return;
     if (hybridLocalHydrating) return;
 
+    const effectiveServerSearchTerm = search.trim();
+
     const requestFilterSignature = JSON.stringify({
-      search: debouncedServerSearchTerm,
+      search: effectiveServerSearchTerm,
       statusFilter: normalizedStatusFilter,
       marcaFilter: normalizedInventoryMarcaFilter,
       cocheFilter: normalizedInventoryCocheFilter,
@@ -4233,18 +4235,18 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
       normalizedPrestadoDebtorFilters.length > 0;
     const shouldIncludeMeta =
       inventoryPage === 1 &&
-      debouncedServerSearchTerm.length === 0 &&
+      effectiveServerSearchTerm.length === 0 &&
       !normalizedStatusFilter &&
       !hasAnyFacetFilterActive;
     const shouldIncludeFacetOptions =
       shouldIncludeMeta &&
-      debouncedServerSearchTerm.length === 0 &&
+      effectiveServerSearchTerm.length === 0 &&
       !normalizedStatusFilter &&
       !hasAnyFacetFilterActive;
 
     void fetchInventoryPage({
       page: inventoryPage,
-      search: debouncedServerSearchTerm,
+      search: effectiveServerSearchTerm,
       statusFilter: normalizedStatusFilter,
       marcaFilter: normalizedInventoryMarcaFilter,
       cocheFilter: normalizedInventoryCocheFilter,
@@ -4263,7 +4265,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     normalizedInventoryPiezaFilter,
     normalizedPrestadoDebtorFilters,
     normalizedStatusFilter,
-    debouncedServerSearchTerm,
+    search,
     hybridLocalHydrating,
     useServerPagination
   ]);
