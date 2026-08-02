@@ -555,6 +555,15 @@ const normalizeInternalStatusValue = (value: unknown) => {
   return normalized.length ? normalized : "SIN ESTATUS";
 };
 
+const buildStatusTotalsFromSnapshot = (rows: InteractiveSearchSnapshotItem[]) => {
+  const totals: Record<string, number> = {};
+  rows.forEach((row) => {
+    const key = normalizeInternalStatusValue(row.statusInternal);
+    totals[key] = (totals[key] ?? 0) + 1;
+  });
+  return totals;
+};
+
 const parseYearValue = (value: unknown) => {
   const raw = toSearchTextValue(value);
   const match = raw.match(/\d{4}/);
@@ -844,9 +853,6 @@ export async function GET(req: Request) {
         }
       }
 
-      if (statusFilter) {
-        filtered = filtered.filter((row) => row.statusInternal === statusFilter);
-      }
       if (marcaFilter) {
         filtered = filtered.filter((row) => row.marca === marcaFilter);
       }
@@ -859,6 +865,12 @@ export async function GET(req: Request) {
       if (prestadoDebtorFilters.length) {
         const debtorSet = new Set(prestadoDebtorFilters);
         filtered = filtered.filter((row) => debtorSet.has(row.prestadoDebtor));
+      }
+
+      const statusTotals = buildStatusTotalsFromSnapshot(filtered);
+
+      if (statusFilter) {
+        filtered = filtered.filter((row) => row.statusInternal === statusFilter);
       }
 
       const total = filtered.length;
@@ -875,6 +887,7 @@ export async function GET(req: Request) {
         pageSize,
         total,
         totalPages,
+        statusTotals,
         items: serialized
       });
     }

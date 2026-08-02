@@ -4684,7 +4684,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
       localCounts[key] = (localCounts[key] ?? 0) + 1;
     });
 
-    const useServerTotals = Object.keys(statusTotals).length > 0 && items.length < totalItems;
+    const useServerTotals = useServerPagination && Object.keys(statusTotals).length > 0;
     const source = useServerTotals ? statusTotals : localCounts;
     return Object.entries(source).sort((a, b) => {
       if (a[1] === b[1]) {
@@ -4692,7 +4692,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
       }
       return b[1] - a[1];
     });
-  }, [items, statusTotals, totalItems]);
+  }, [items, statusTotals, useServerPagination]);
 
   const statusCounterMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -4701,6 +4701,47 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     });
     return map;
   }, [statusCounters]);
+
+  const statusTabOptions = useMemo(() => {
+    const initialTotals = normalizeStatusTotals(initialPage.statusTotals);
+    const values = new Set<string>(Object.keys(initialTotals));
+
+    statusCounters.forEach(([label]) => {
+      values.add(label);
+    });
+
+    if (normalizedStatusFilter) {
+      values.add(normalizedStatusFilter);
+    }
+
+    if (!values.size) {
+      values.add("SIN ESTATUS");
+      sortedEstatusInternoOptions.forEach((label) => values.add(label));
+    }
+
+    const preferredOrder = [
+      "ML",
+      "VENDIDO",
+      "SIN SUBIR",
+      "PRESTADO",
+      "FOTOS",
+      "FALTA UBICACION",
+      "NO ESTA",
+      "CHECAR",
+      "SIN ESTATUS"
+    ];
+
+    return Array.from(values).sort((left, right) => {
+      const leftIdx = preferredOrder.indexOf(left);
+      const rightIdx = preferredOrder.indexOf(right);
+      if (leftIdx >= 0 || rightIdx >= 0) {
+        if (leftIdx < 0) return 1;
+        if (rightIdx < 0) return -1;
+        if (leftIdx !== rightIdx) return leftIdx - rightIdx;
+      }
+      return left.localeCompare(right, "es");
+    });
+  }, [initialPage.statusTotals, normalizedStatusFilter, statusCounters]);
 
   const inventoryStatusFilterOptions = useMemo(() => {
     const values = new Set<string>(["SIN ESTATUS", ...sortedEstatusInternoOptions]);
@@ -6180,10 +6221,11 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
               Tu rol no puede pausar o activar publicaciones en Mercado Libre.
             </div>
           ))}
-          {statusCounters.length > 0 && (
+          {statusTabOptions.length > 0 && (
             <div className="flex flex-wrap gap-2 rounded-2xl border border-slate-700 bg-slate-900/60 p-3 text-[11px] uppercase tracking-wide text-slate-200">
-              {statusCounters.map(([label, count]) => {
-                const isActive = normalizedStatusFilterDraft === label;
+              {statusTabOptions.map((label) => {
+                const count = statusCounterMap.get(label) ?? 0;
+                const isActive = normalizedStatusFilter === label;
                 const baseClasses = "flex items-center gap-2 rounded-xl border px-3 py-1 text-left transition focus:outline-none";
                 const activeClasses = isActive
                   ? "border-amber-400 bg-amber-400/20 text-amber-100"
