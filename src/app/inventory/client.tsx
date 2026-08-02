@@ -230,6 +230,7 @@ const INVENTORY_TABLE_COLUMN_COUNT = 35;
 const WORKER_SEARCH_MIN_ITEMS = 250;
 const INVENTORY_PAGE_BLOCK_SIZE_DEFAULT = 100;
 const INVENTORY_PAGE_BLOCK_SIZE_ALL_REQUEST = 5000;
+const MAX_INVENTORY_SEARCH_TOKENS = 4;
 const INVENTORY_PAGE_CACHE_TTL_MS = 25_000;
 const INVENTORY_LOADING_INDICATOR_DELAY_MS = 180;
 const MANUAL_SKU_NUMBER_PADDING = 5;
@@ -330,7 +331,7 @@ const splitInventorySearchTokens = (value: string) => {
     .map((token) => token.trim())
     .filter((token) => token.length);
 
-  return Array.from(new Set(tokens)).slice(0, 10);
+  return Array.from(new Set(tokens)).slice(0, MAX_INVENTORY_SEARCH_TOKENS);
 };
 
 const parseInventorySearchYearToken = (token: string) => {

@@ -35,6 +35,7 @@ const workerScope = self as unknown as {
 };
 
 let indexedItems: Array<{ id: string; text: string; anoDesde: number | null; anoHasta: number | null }> = [];
+const MAX_SEARCH_TOKENS = 4;
 
 const toText = (value: unknown) => (value === null || value === undefined ? "" : String(value));
 
@@ -45,7 +46,7 @@ const splitSearchTokens = (value: string) => {
     .map((token) => token.trim())
     .filter((token) => token.length);
 
-  return Array.from(new Set(tokens)).slice(0, 10);
+  return Array.from(new Set(tokens)).slice(0, MAX_SEARCH_TOKENS);
 };
 
 const parseSearchYearToken = (token: string) => {

@@ -12,6 +12,7 @@ import { z } from "zod";
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 5000;
 const STATUS_TOTALS_CACHE_TTL_MS = 5 * 60 * 1000;
+const MAX_SEARCH_TOKENS = 4;
 
 const canEditInventory = (role?: string | null) => {
   const normalized = (role ?? "").toLowerCase();
@@ -112,7 +113,7 @@ const splitSearchTokens = (value: string) => {
     .map((token) => token.trim())
     .filter((token) => token.length);
 
-  return Array.from(new Set(tokens)).slice(0, 10);
+  return Array.from(new Set(tokens)).slice(0, MAX_SEARCH_TOKENS);
 };
 
 const parseSearchYearToken = (token: string) => {
@@ -129,7 +130,7 @@ const isLikelyCodeSearch = (rawValue: string, normalizedToken: string) => {
   const compactRawValue = rawValue.replace(/[\s._-]+/g, "");
   if (compactRawValue.length > 48) return false;
   const wordCount = rawValue.trim().split(/\s+/).filter((token) => token.length).length;
-  if (wordCount > 3) return false;
+  if (wordCount !== 1) return false;
   return /[0-9]/.test(normalizedToken) && /[a-z]/i.test(normalizedToken);
 };
 
