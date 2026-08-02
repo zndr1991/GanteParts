@@ -676,6 +676,33 @@ const parsePositiveAmountInput = (rawValue: string) => {
   return Math.round(parsed * 100) / 100;
 };
 
+const normalizeYearForFinanceConcept = (value: unknown) => {
+  const raw = (value ?? "").toString().trim();
+  const match = raw.match(/\d{4}/);
+  return match?.[0] ?? "";
+};
+
+const buildFinanceSaleConcept = ({
+  piece,
+  coche,
+  anoDesde,
+  anoHasta
+}: {
+  piece?: string | null;
+  coche?: string | null;
+  anoDesde?: string | null;
+  anoHasta?: string | null;
+}) => {
+  const normalizedPiece = ((piece ?? "").toString().trim().toUpperCase() || "PIEZA VENDIDA").replace(/\s+/g, " ");
+  const normalizedCoche = (coche ?? "").toString().trim().toUpperCase().replace(/\s+/g, " ");
+  const yearFrom = normalizeYearForFinanceConcept(anoDesde);
+  const yearTo = normalizeYearForFinanceConcept(anoHasta);
+  const yearLabel = yearFrom && yearTo ? (yearFrom === yearTo ? yearFrom : `${yearFrom}-${yearTo}`) : yearFrom || yearTo;
+
+  const parts = [normalizedPiece, normalizedCoche, yearLabel].filter((value) => value.length);
+  return (parts.join(" ") || "PIEZA VENDIDA").slice(0, 180);
+};
+
 const formatRelativeTime = (value: string) => {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return "-";
@@ -2503,11 +2530,17 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   const registerSoldItemInFinance = useCallback(
     async ({
       piece,
+      coche,
+      anoDesde,
+      anoHasta,
       skuInternal,
       defaultAmount,
       saleDate
     }: {
       piece: string;
+      coche?: string | null;
+      anoDesde?: string | null;
+      anoHasta?: string | null;
       skuInternal: string;
       defaultAmount?: number | null;
       saleDate?: string | null;
@@ -2553,7 +2586,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
         };
       }
 
-      const concept = ((piece || "PIEZA VENDIDA").trim().toUpperCase() || "PIEZA VENDIDA").slice(0, 180);
+      const concept = buildFinanceSaleConcept({ piece, coche, anoDesde, anoHasta });
       const code = (skuInternal ?? "").toString().trim().toUpperCase() || null;
       const date = toDateOnly(saleDate);
 
@@ -2676,6 +2709,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
           "PIEZA VENDIDA";
         financeResult = await registerSoldItemInFinance({
           piece,
+          coche: (current.extraData?.coche ?? "").toString(),
+          anoDesde: (current.extraData?.ano_desde ?? "").toString(),
+          anoHasta: (current.extraData?.ano_hasta ?? "").toString(),
           skuInternal: current.skuInternal,
           defaultAmount: hasPriceOverride ? overridePrice : current.price,
           saleDate: fechaPrestamoPago
@@ -3868,6 +3904,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
 
         financeResult = await registerSoldItemInFinance({
           piece: pieceForFinance,
+          coche,
+          anoDesde,
+          anoHasta,
           skuInternal,
           defaultAmount: priceValue ?? (typeof updatedItem?.price === "number" ? updatedItem.price : null),
           saleDate: fechaPrestamoPago
