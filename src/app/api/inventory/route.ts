@@ -337,6 +337,21 @@ type InventoryIdRow = {
   id: string;
 };
 
+type InventoryListRow = {
+  id: string;
+  skuInternal: string;
+  sellerCustomField: string | null;
+  title: string | null;
+  price: any;
+  stock: number | bigint;
+  status: string;
+  mlItemId: string | null;
+  extraData: any;
+  photoCount: number | bigint;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 type CountRow = {
   count: number | bigint | string;
 };
@@ -649,9 +664,20 @@ export async function GET(req: Request) {
       const shouldUseFastCount = fastSearchMode || fastCodeSearchMode || !includeMeta;
       const shouldLoadPrestadoMetrics = statusFilter === "PRESTADO";
 
-      const [idRows, countRows, statusTotals, prestadoMetrics, facetOptions] = await Promise.all([
-        prisma.$queryRaw<InventoryIdRow[]>(Prisma.sql`
-          SELECT "id"
+      const [dataRows, countRows, statusTotals, prestadoMetrics, facetOptions] = await Promise.all([
+        prisma.$queryRaw<InventoryListRow[]>(Prisma.sql`
+          SELECT
+            "id", "skuInternal", "sellerCustomField", "title", "price", "stock",
+            "status", "mlItemId",
+            ("extraData" - 'photos') AS "extraData",
+            COALESCE(
+              CASE
+                WHEN jsonb_typeof("extraData"->>'photos') = 'array' THEN jsonb_array_length("extraData"->'photos')
+                ELSE 0
+              END,
+              0
+            )::int AS "photoCount",
+            "createdAt", "updatedAt"
           FROM "InventoryItem"
           WHERE 1=1
           ${ownerSql}
@@ -699,21 +725,19 @@ export async function GET(req: Request) {
           : Promise.resolve<InventoryFacetOptions | null>(null)
       ]);
 
-      const hasMoreFastRows = shouldUseFastCount && idRows.length > pageSize;
-      const ids = (hasMoreFastRows ? idRows.slice(0, pageSize) : idRows).map((row) => row.id);
-      const items = ids.length
-        ? await prisma.inventoryItem.findMany({
-            where: ownerId ? { ownerId, id: { in: ids } } : { id: { in: ids } },
-            orderBy: { updatedAt: "desc" }
-          })
-        : [];
+      const hasMoreFastRows = shouldUseFastCount && dataRows.length > pageSize;
+      const visibleRows = hasMoreFastRows ? dataRows.slice(0, pageSize) : dataRows;
 
       const total = shouldUseFastCount
         ? hasMoreFastRows
           ? skip + pageSize + 1
-          : skip + ids.length
+          : skip + visibleRows.length
         : Number(countRows[0]?.count ?? 0);
-      const serialized = items.map((item) => serializeInventoryItem(item));
+      const serialized = visibleRows.map((rawRow) => {
+        const result = serializeInventoryItem(rawRow);
+        result.photoCount = Number(rawRow.photoCount ?? 0);
+        return result;
+      });
       const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
       return NextResponse.json({

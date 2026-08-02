@@ -4157,9 +4157,37 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     setInventoryPage(1);
   }, []);
 
+  const applyFacetFilterInstant = useCallback((key: "marca" | "coche" | "pieza", value: string) => {
+    if (key === "marca") {
+      setInventoryMarcaFilter(value);
+      setInventoryMarcaFilterDraft(value);
+    } else if (key === "coche") {
+      setInventoryCocheFilter(value);
+      setInventoryCocheFilterDraft(value);
+    } else {
+      setInventoryPiezaFilter(value);
+      setInventoryPiezaFilterDraft(value);
+    }
+    lastServerFilterRequestSignatureRef.current = null;
+    setInventoryPage(1);
+  }, []);
+
   useEffect(() => {
     setSearchDraft(search);
   }, [search]);
+
+  // Auto-aplicar texto 400ms después de dejar de teclear
+  useEffect(() => {
+    const trimmedDraft = searchDraft.trim();
+    if (trimmedDraft === search) return;
+    const id = setTimeout(() => {
+      setSearch(trimmedDraft);
+      setDebouncedServerSearchTerm(trimmedDraft);
+      lastServerFilterRequestSignatureRef.current = null;
+      setInventoryPage(1);
+    }, 400);
+    return () => clearTimeout(id);
+  }, [searchDraft, search]);
 
   useEffect(() => {
     setStatusFilterDraft(statusFilter);
@@ -5906,7 +5934,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                 value={statusFilterDraft ?? ""}
                 onChange={(event) => {
                   const nextValue = event.target.value.trim().toUpperCase();
-                  setStatusFilterDraft(nextValue.length ? nextValue : null);
+                  applyStatusTabFilter(nextValue.length ? nextValue : null);
                 }}
                 className="rounded-xl bg-slate-900 border border-slate-700 px-3 py-2.5 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
               >
@@ -5924,7 +5952,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
 
               <select
                 value={inventoryMarcaFilterDraft}
-                onChange={(event) => setInventoryMarcaFilterDraft(event.target.value)}
+                onChange={(event) => applyFacetFilterInstant("marca", event.target.value)}
                 className="rounded-xl bg-slate-900 border border-slate-700 px-3 py-2.5 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
               >
                 <option value="">Marca (todas)</option>
@@ -5937,7 +5965,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
 
               <select
                 value={inventoryCocheFilterDraft}
-                onChange={(event) => setInventoryCocheFilterDraft(event.target.value)}
+                onChange={(event) => applyFacetFilterInstant("coche", event.target.value)}
                 className="rounded-xl bg-slate-900 border border-slate-700 px-3 py-2.5 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
               >
                 <option value="">Coche (todos)</option>
@@ -5950,7 +5978,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
 
               <select
                 value={inventoryPiezaFilterDraft}
-                onChange={(event) => setInventoryPiezaFilterDraft(event.target.value)}
+                onChange={(event) => applyFacetFilterInstant("pieza", event.target.value)}
                 className="rounded-xl bg-slate-900 border border-slate-700 px-3 py-2.5 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
               >
                 <option value="">Pieza (todas)</option>
