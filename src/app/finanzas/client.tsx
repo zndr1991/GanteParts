@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type EntryType = "income" | "expense";
 type DebtMovementType = "charge" | "payment";
@@ -54,6 +54,18 @@ type FinanceData = {
     payment: number;
     balance: number;
   };
+};
+
+type InventoryLookupItem = {
+  skuInternal: string;
+  mlItemId?: string | null;
+  sellerCustomField?: string | null;
+  title?: string | null;
+  extraData?: Record<string, unknown> | null;
+};
+
+type InventoryLookupResponse = {
+  items?: InventoryLookupItem[];
 };
 
 type MovementDraft = {
@@ -116,6 +128,96 @@ const parseAmountInput = (rawValue: string) => {
   return Math.round(parsed * 100) / 100;
 };
 
+const normalizeCodeToken = (value: string) => value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+const readExtraValue = (extraData: Record<string, unknown> | null | undefined, keys: string[]) => {
+  if (!extraData || typeof extraData !== "object") return "";
+  for (const key of keys) {
+    const rawValue = extraData[key];
+    if (typeof rawValue === "string" || typeof rawValue === "number") {
+      const normalized = String(rawValue).trim();
+      if (normalized.length) return normalized;
+    }
+  }
+  return "";
+};
+
+const normalizeYearForConcept = (value: string) => {
+  const match = value.match(/\d{4}/);
+  return match?.[0] ?? "";
+};
+
+const buildYearLabel = (fromYearRaw: string, toYearRaw: string) => {
+  const fromYear = normalizeYearForConcept(fromYearRaw);
+  const toYear = normalizeYearForConcept(toYearRaw);
+  if (!fromYear && !toYear) return "";
+  if (!fromYear) return toYear;
+  if (!toYear) return fromYear;
+  return fromYear === toYear ? fromYear : `${fromYear}-${toYear}`;
+};
+
+const buildConceptFromInventoryItem = (item: InventoryLookupItem) => {
+  const extraData = item.extraData ?? null;
+  const piece = readExtraValue(extraData, ["pieza", "descripcion_local", "descripcion", "descripcion_ml"]) || item.title || "PIEZA";
+  const coche = readExtraValue(extraData, ["coche", "modelo", "vehiculo"]);
+  const yearLabel = buildYearLabel(
+    readExtraValue(extraData, ["ano_desde", "anoDesde"]),
+    readExtraValue(extraData, ["ano_hasta", "anoHasta"])
+  );
+
+  const concept = [piece, coche, yearLabel]
+    .map((value) => value.toString().trim().toUpperCase().replace(/\s+/g, " "))
+    .filter((value) => value.length)
+    .join(" ");
+
+  return (concept || "PIEZA").slice(0, 180);
+};
+
+const scoreInventoryCodeMatch = (item: InventoryLookupItem, rawCode: string) => {
+  const normalizedCode = normalizeCodeToken(rawCode);
+  if (!normalizedCode.length) return 0;
+
+  const fields = [item.skuInternal, item.mlItemId ?? "", item.sellerCustomField ?? ""];
+  let bestScore = 0;
+
+  fields.forEach((field, index) => {
+    const normalizedField = normalizeCodeToken(field ?? "");
+    if (!normalizedField.length) return;
+
+    const tieBreaker = 3 - index;
+    if (normalizedField === normalizedCode) {
+      bestScore = Math.max(bestScore, 100 + tieBreaker);
+      return;
+    }
+
+    if (normalizedField.startsWith(normalizedCode) || normalizedCode.startsWith(normalizedField)) {
+      bestScore = Math.max(bestScore, 80 + tieBreaker);
+      return;
+    }
+
+    if (normalizedField.includes(normalizedCode)) {
+      bestScore = Math.max(bestScore, 60 + tieBreaker);
+    }
+  });
+
+  return bestScore;
+};
+
+const findBestInventoryMatch = (items: InventoryLookupItem[], rawCode: string) => {
+  let bestItem: InventoryLookupItem | null = null;
+  let bestScore = 0;
+
+  for (const item of items) {
+    const score = scoreInventoryCodeMatch(item, rawCode);
+    if (score > bestScore) {
+      bestScore = score;
+      bestItem = item;
+    }
+  }
+
+  return bestItem;
+};
+
 const makeEmptyMovementDraft = (): MovementDraft => ({
   concept: "",
   amount: "",
@@ -147,6 +249,10 @@ export function FinanceClient({ userRole }: FinanceClientProps) {
   const [entryForm, setEntryForm] = useState(makeInitialEntryForm());
   const [debtForm, setDebtForm] = useState(makeInitialDebtForm());
   const [movementDrafts, setMovementDrafts] = useState<Record<string, DebtMovementDrafts>>({});
+  const conceptEditedManuallyRef = useRef(false);
+  const autoConceptRef = useRef("");
+  const lookupRequestIdRef = useRef(0);
+  const lookupAbortRef = useRef<AbortController | null>(null);
 
   const normalizedRole = (userRole ?? "").toLowerCase();
   const roleCanManage = normalizedRole === "admin" || normalizedRole === "supervisor" || normalizedRole === "operator";
@@ -207,6 +313,87 @@ export function FinanceClient({ userRole }: FinanceClientProps) {
     });
   }, [data?.debts]);
 
+  useEffect(() => {
+    return () => {
+      lookupAbortRef.current?.abort();
+    };
+  }, []);
+
+  const fillConceptFromCode = useCallback(async (rawCode: string) => {
+    const code = rawCode.trim();
+    if (!code.length) return;
+
+    lookupRequestIdRef.current += 1;
+    const requestId = lookupRequestIdRef.current;
+
+    lookupAbortRef.current?.abort();
+    const controller = new AbortController();
+    lookupAbortRef.current = controller;
+
+    try {
+      const params = new URLSearchParams({
+        search: code,
+        page: "1",
+        pageSize: "25",
+        includeMeta: "0",
+        includeFacetOptions: "0"
+      });
+
+      const response = await fetch(`/api/inventory?${params.toString()}`, {
+        cache: "no-store",
+        signal: controller.signal
+      });
+
+      const payload = (await response.json().catch(() => null)) as InventoryLookupResponse | null;
+      if (!response.ok || requestId !== lookupRequestIdRef.current) return;
+
+      const matched = findBestInventoryMatch(Array.isArray(payload?.items) ? payload.items : [], code);
+      if (!matched) return;
+
+      const nextConcept = buildConceptFromInventoryItem(matched);
+      if (!nextConcept.length) return;
+
+      setEntryForm((current) => {
+        if (current.code.trim() !== code) return current;
+
+        const currentConcept = current.concept.trim();
+        const canOverwrite =
+          !currentConcept.length ||
+          !conceptEditedManuallyRef.current ||
+          currentConcept === autoConceptRef.current;
+
+        if (!canOverwrite) return current;
+
+        autoConceptRef.current = nextConcept;
+        conceptEditedManuallyRef.current = false;
+
+        return {
+          ...current,
+          concept: nextConcept
+        };
+      });
+    } catch (error: any) {
+      if (error?.name === "AbortError") return;
+    }
+  }, []);
+
+  useEffect(() => {
+    const code = entryForm.code.trim();
+    if (!code.length) return;
+
+    const concept = entryForm.concept.trim();
+    const canAutofill = !concept.length || !conceptEditedManuallyRef.current || concept === autoConceptRef.current;
+    if (!canAutofill) return;
+
+    const timeoutId = window.setTimeout(() => {
+      void fillConceptFromCode(code);
+    }, 280);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [entryForm.code, entryForm.concept, fillConceptFromCode]);
+
   const weekRangeLabel = useMemo(() => {
     if (!data) return "";
     return `${formatDateLabel(data.weekStart)} - ${formatDateLabel(data.weekEnd)}`;
@@ -259,6 +446,8 @@ export function FinanceClient({ userRole }: FinanceClientProps) {
           code: "",
           amount: ""
         }));
+        conceptEditedManuallyRef.current = false;
+        autoConceptRef.current = "";
         setMessage("Movimiento guardado");
         await fetchFinanceData(weekAnchor, { silent: true });
       } catch (error: any) {
@@ -694,7 +883,11 @@ export function FinanceClient({ userRole }: FinanceClientProps) {
                 type="text"
                 placeholder="Concepto"
                 value={entryForm.concept}
-                onChange={(event) => setEntryForm((current) => ({ ...current, concept: event.target.value }))}
+                onChange={(event) => {
+                  const nextConcept = event.target.value;
+                  conceptEditedManuallyRef.current = nextConcept.trim().length > 0;
+                  setEntryForm((current) => ({ ...current, concept: nextConcept }));
+                }}
                 className="rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm md:col-span-2"
                 disabled={!canManage || submitting}
                 required
@@ -703,7 +896,14 @@ export function FinanceClient({ userRole }: FinanceClientProps) {
                 type="text"
                 placeholder="Codigo"
                 value={entryForm.code}
-                onChange={(event) => setEntryForm((current) => ({ ...current, code: event.target.value }))}
+                onChange={(event) => {
+                  const nextCode = event.target.value;
+                  const currentConcept = entryForm.concept.trim();
+                  if (!currentConcept.length || currentConcept === autoConceptRef.current) {
+                    conceptEditedManuallyRef.current = false;
+                  }
+                  setEntryForm((current) => ({ ...current, code: nextCode }));
+                }}
                 className="rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
                 disabled={!canManage || submitting}
               />
