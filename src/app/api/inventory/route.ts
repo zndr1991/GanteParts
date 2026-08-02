@@ -386,14 +386,42 @@ type StatusTotalsCacheEntry = {
   expiresAt: number;
 };
 
+type InteractiveSearchSnapshotItem = InventoryListRow & {
+  searchText: string;
+  normalizedSku: string;
+  normalizedMlItemId: string;
+  normalizedSellerCustomField: string;
+  statusInternal: string;
+  marca: string;
+  coche: string;
+  pieza: string;
+  prestadoDebtor: string;
+  anoDesde: number | null;
+  anoHasta: number | null;
+};
+
+type InteractiveSearchCacheEntry = {
+  value: InteractiveSearchSnapshotItem[];
+  expiresAt: number;
+};
+
 const statusTotalsCache = new Map<string, StatusTotalsCacheEntry>();
 const statusTotalsInFlight = new Map<string, Promise<Record<string, number>>>();
+const interactiveSearchCache = new Map<string, InteractiveSearchCacheEntry>();
+const interactiveSearchInFlight = new Map<string, Promise<InteractiveSearchSnapshotItem[]>>();
 
 const statusTotalsCacheKey = (ownerId: string | null) => ownerId ?? "__ALL__";
+const interactiveSearchCacheKey = (ownerId: string | null) => ownerId ?? "__ALL__";
+const INTERACTIVE_SEARCH_CACHE_TTL_MS = 90 * 1000;
 
 const invalidateStatusTotalsCache = () => {
   statusTotalsCache.clear();
   statusTotalsInFlight.clear();
+};
+
+const invalidateInteractiveSearchCache = () => {
+  interactiveSearchCache.clear();
+  interactiveSearchInFlight.clear();
 };
 
 const roundCurrencyValue = (value: number) => Math.round(value * 100) / 100;
@@ -517,6 +545,74 @@ const parseNumericValue = (value: number | bigint | string | null | undefined) =
   return parsed;
 };
 
+const toSearchTextValue = (value: unknown) => (value === null || value === undefined ? "" : String(value));
+
+const normalizeComparableValue = (value: unknown) => toSearchTextValue(value).trim().toUpperCase();
+
+const normalizeInternalStatusValue = (value: unknown) => {
+  const normalized = normalizeComparableValue(value);
+  return normalized.length ? normalized : "SIN ESTATUS";
+};
+
+const parseYearValue = (value: unknown) => {
+  const raw = toSearchTextValue(value);
+  const match = raw.match(/\d{4}/);
+  if (!match) return null;
+  const year = Number.parseInt(match[0], 10);
+  if (!Number.isFinite(year) || year < 1900 || year > 2100) return null;
+  return year;
+};
+
+const matchesYearRange = (fromYear: number | null, toYear: number | null, year: number) => {
+  const normalizedFrom = fromYear ?? toYear;
+  const normalizedTo = toYear ?? fromYear;
+  if (normalizedFrom === null || normalizedTo === null) return false;
+  const minYear = Math.min(normalizedFrom, normalizedTo);
+  const maxYear = Math.max(normalizedFrom, normalizedTo);
+  return year >= minYear && year <= maxYear;
+};
+
+const buildInteractiveSearchText = (item: InventoryListRow) => {
+  const extra = item.extraData && typeof item.extraData === "object" && !Array.isArray(item.extraData)
+    ? (item.extraData as Record<string, unknown>)
+    : {};
+
+  return [
+    item.skuInternal,
+    item.title,
+    extra.descripcion_local,
+    extra.descripcion_ml,
+    item.mlItemId,
+    item.sellerCustomField,
+    extra.estatus_interno,
+    extra.origen,
+    extra.coche,
+    extra.version,
+    extra.pieza,
+    extra.marca,
+    extra.ano_desde,
+    extra.ano_hasta,
+    extra.ubicacion,
+    extra.alto,
+    extra.largo,
+    extra.ancho,
+    extra.peso,
+    extra.forma_publicacion,
+    extra.observaciones,
+    extra.compatibilidades,
+    extra.inventario,
+    extra.revision,
+    extra.facebook,
+    extra.prestado_vendido_a,
+    extra.fecha_prestamo_pago,
+    item.stock,
+    item.price
+  ]
+    .map(toSearchTextValue)
+    .join(" ")
+    .toLowerCase();
+};
+
 const getPrestadoMetrics = async (params: {
   ownerSql: Prisma.Sql;
   statusSql: Prisma.Sql;
@@ -621,6 +717,80 @@ const getStatusTotals = async (ownerId: string | null) => {
   return task;
 };
 
+const loadInteractiveSearchSnapshot = async (ownerId: string | null) => {
+  const ownerSql = ownerId ? Prisma.sql`AND "ownerId" = ${ownerId}` : Prisma.empty;
+
+  const rows = await prisma.$queryRaw<InventoryListRow[]>(Prisma.sql`
+    SELECT
+      "id", "skuInternal", "sellerCustomField", "title", "price", "stock",
+      "status", "mlItemId",
+      ("extraData" - 'photos') AS "extraData",
+      COALESCE(
+        CASE
+          WHEN jsonb_typeof("extraData"->'photos') = 'array' THEN jsonb_array_length("extraData"->'photos')
+          ELSE 0
+        END,
+        0
+      )::int AS "photoCount",
+      "createdAt", "updatedAt"
+    FROM "InventoryItem"
+    WHERE 1=1
+    ${ownerSql}
+    ORDER BY "updatedAt" DESC
+  `);
+
+  return rows.map((row) => {
+    const extra = row.extraData && typeof row.extraData === "object" && !Array.isArray(row.extraData)
+      ? (row.extraData as Record<string, unknown>)
+      : {};
+    const normalizedPiece = normalizeComparableValue(extra.pieza);
+
+    return {
+      ...row,
+      searchText: buildInteractiveSearchText(row),
+      normalizedSku: normalizeSearchToken(row.skuInternal ?? ""),
+      normalizedMlItemId: normalizeSearchToken(row.mlItemId ?? ""),
+      normalizedSellerCustomField: normalizeSearchToken(row.sellerCustomField ?? ""),
+      statusInternal: normalizeInternalStatusValue(extra.estatus_interno),
+      marca: normalizeComparableValue(extra.marca),
+      coche: normalizeComparableValue(extra.coche),
+      pieza: normalizedPiece.length ? normalizedPiece : normalizeComparableValue(row.title),
+      prestadoDebtor: normalizeComparableValue(extra.prestado_vendido_a),
+      anoDesde: parseYearValue(extra.ano_desde),
+      anoHasta: parseYearValue(extra.ano_hasta)
+    } satisfies InteractiveSearchSnapshotItem;
+  });
+};
+
+const getInteractiveSearchSnapshot = async (ownerId: string | null) => {
+  const key = interactiveSearchCacheKey(ownerId);
+  const now = Date.now();
+  const cached = interactiveSearchCache.get(key);
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+
+  const inflight = interactiveSearchInFlight.get(key);
+  if (inflight) {
+    return inflight;
+  }
+
+  const task = loadInteractiveSearchSnapshot(ownerId)
+    .then((value) => {
+      interactiveSearchCache.set(key, {
+        value,
+        expiresAt: Date.now() + INTERACTIVE_SEARCH_CACHE_TTL_MS
+      });
+      return value;
+    })
+    .finally(() => {
+      interactiveSearchInFlight.delete(key);
+    });
+
+  interactiveSearchInFlight.set(key, task);
+  return task;
+};
+
 export async function GET(req: Request) {
   const session = await auth();
   if (!session?.user?.id) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
@@ -641,8 +811,74 @@ export async function GET(req: Request) {
     const includeFacetOptions = parseIncludeFacetOptions(searchParams);
     const includeMeta = parseIncludeMeta(searchParams);
     const searchTokens = searchFilter ? splitSearchTokens(searchFilter) : [];
+    const normalizedSearchToken = searchFilter ? normalizeSearchToken(searchFilter) : "";
+    const codeSearchMode = Boolean(searchFilter && isLikelyCodeSearch(searchFilter, normalizedSearchToken));
+
+    if (!includeMeta) {
+      let filtered = await getInteractiveSearchSnapshot(ownerId);
+
+      if (searchFilter) {
+        if (codeSearchMode) {
+          filtered = filtered.filter(
+            (row) =>
+              row.normalizedSku === normalizedSearchToken ||
+              row.normalizedMlItemId === normalizedSearchToken ||
+              row.normalizedSellerCustomField === normalizedSearchToken ||
+              row.normalizedSku.startsWith(normalizedSearchToken) ||
+              row.normalizedMlItemId.startsWith(normalizedSearchToken) ||
+              row.normalizedSellerCustomField.startsWith(normalizedSearchToken)
+          );
+        } else {
+          const tokenChecks = searchTokens.map((token) => ({
+            token,
+            year: parseSearchYearToken(token)
+          }));
+
+          filtered = filtered.filter((row) =>
+            tokenChecks.every(({ token, year }) => {
+              if (row.searchText.includes(token)) return true;
+              return year !== null && matchesYearRange(row.anoDesde, row.anoHasta, year);
+            })
+          );
+        }
+      }
+
+      if (statusFilter) {
+        filtered = filtered.filter((row) => row.statusInternal === statusFilter);
+      }
+      if (marcaFilter) {
+        filtered = filtered.filter((row) => row.marca === marcaFilter);
+      }
+      if (cocheFilter) {
+        filtered = filtered.filter((row) => row.coche === cocheFilter);
+      }
+      if (piezaFilter) {
+        filtered = filtered.filter((row) => row.pieza === piezaFilter);
+      }
+      if (prestadoDebtorFilters.length) {
+        const debtorSet = new Set(prestadoDebtorFilters);
+        filtered = filtered.filter((row) => debtorSet.has(row.prestadoDebtor));
+      }
+
+      const total = filtered.length;
+      const visibleRows = filtered.slice(skip, skip + pageSize);
+      const serialized = visibleRows.map((rawRow) => {
+        const result = serializeInventoryItem(rawRow);
+        result.photoCount = Number(rawRow.photoCount ?? 0);
+        return result;
+      });
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+      return NextResponse.json({
+        page,
+        pageSize,
+        total,
+        totalPages,
+        items: serialized
+      });
+    }
+
     const shouldUseLightweightSearch =
-      !includeMeta &&
       searchTokens.length > 0 &&
       searchTokens.some((token) => token.length <= 2 && parseSearchYearToken(token) === null);
 
@@ -655,8 +891,6 @@ export async function GET(req: Request) {
     const prestadoDebtorSql = buildPrestadoDebtorFilterSql(prestadoDebtorFilters);
 
     if (statusFilter || searchFilter || marcaFilter || cocheFilter || piezaFilter || prestadoDebtorFilters.length) {
-      const normalizedSearchToken = searchFilter ? normalizeSearchToken(searchFilter) : "";
-      const codeSearchMode = Boolean(searchFilter && isLikelyCodeSearch(searchFilter, normalizedSearchToken));
       const hasNoAdditionalFilters =
         !statusFilter && !marcaFilter && !cocheFilter && !piezaFilter && !prestadoDebtorFilters.length;
       const fastSearchMode = Boolean(searchFilter && hasNoAdditionalFilters && page === 1);
@@ -863,6 +1097,7 @@ export async function POST(req: Request) {
 
     revalidateInventorySnapshotCache();
     invalidateStatusTotalsCache();
+    invalidateInteractiveSearchCache();
 
     return NextResponse.json(serializeInventoryItem(item, { includePhotos: true }), { status: 201 });
   } catch (err: any) {
@@ -917,6 +1152,7 @@ export async function DELETE(req: Request) {
 
   revalidateInventorySnapshotCache();
   invalidateStatusTotalsCache();
+  invalidateInteractiveSearchCache();
 
   return NextResponse.json({ deleted: result.count });
 }
@@ -1207,6 +1443,7 @@ export async function PATCH(req: Request) {
 
   revalidateInventorySnapshotCache();
   invalidateStatusTotalsCache();
+  invalidateInteractiveSearchCache();
 
   return NextResponse.json({
     ...serializeInventoryItem(item),
