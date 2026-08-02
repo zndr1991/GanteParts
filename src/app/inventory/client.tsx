@@ -4704,7 +4704,11 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
 
   const statusTabOptions = useMemo(() => {
     const initialTotals = normalizeStatusTotals(initialPage.statusTotals);
-    const values = new Set<string>(Object.keys(initialTotals));
+    const values = new Set<string>(["SIN ESTATUS", ...sortedEstatusInternoOptions]);
+
+    Object.keys(initialTotals).forEach((label) => {
+      values.add(label);
+    });
 
     statusCounters.forEach(([label]) => {
       values.add(label);
@@ -4712,11 +4716,6 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
 
     if (normalizedStatusFilter) {
       values.add(normalizedStatusFilter);
-    }
-
-    if (!values.size) {
-      values.add("SIN ESTATUS");
-      sortedEstatusInternoOptions.forEach((label) => values.add(label));
     }
 
     const preferredOrder = [
