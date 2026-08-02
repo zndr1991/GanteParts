@@ -226,7 +226,7 @@ const NOTIFICATIONS_POLL_INTERVAL_MS = 20_000;
 const TABLE_OVERSCAN_ROWS = 8;
 const INVENTORY_TABLE_COLUMN_COUNT = 35;
 const WORKER_SEARCH_MIN_ITEMS = 250;
-const INVENTORY_PAGE_BLOCK_SIZE = 40;
+const INVENTORY_PAGE_BLOCK_SIZE = 100;
 const INVENTORY_PAGE_CACHE_TTL_MS = 25_000;
 const INVENTORY_LOADING_INDICATOR_DELAY_MS = 180;
 const MANUAL_SKU_NUMBER_PADDING = 5;
@@ -4600,7 +4600,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     const start = (inventoryPage - 1) * INVENTORY_PAGE_BLOCK_SIZE;
     return filteredItems.slice(start, start + INVENTORY_PAGE_BLOCK_SIZE);
   }, [filteredItems, inventoryPage, useServerPagination]);
-  const shouldVirtualizeDesktop = paginatedFilteredItems.length > 120;
+  const shouldVirtualizeDesktop = paginatedFilteredItems.length > 60;
 
   const visibleBaseTotal = useServerPagination ? totalItems : filteredItems.length;
   const paginatedVisibleStart = visibleBaseTotal
