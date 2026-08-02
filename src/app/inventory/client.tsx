@@ -4110,6 +4110,11 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
       nextCocheFilter === normalizedInventoryCocheFilter &&
       nextPiezaFilter === normalizedInventoryPiezaFilter
     ) {
+      if (useServerPagination) {
+        inventoryPageCacheRef.current.clear();
+        lastServerFilterRequestSignatureRef.current = null;
+        setInventoryReloadSeq((current) => current + 1);
+      }
       return;
     }
 
@@ -4133,7 +4138,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     normalizedInventoryCocheFilterDraft,
     normalizedInventoryCocheFilter,
     normalizedInventoryPiezaFilterDraft,
-    normalizedInventoryPiezaFilter
+    normalizedInventoryPiezaFilter,
+    useServerPagination
   ]);
 
   const clearAppliedInventorySearch = useCallback(() => {
@@ -5901,7 +5907,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                 />
                 <button
                   type="submit"
-                  disabled={!hasPendingFilterDraftChanges}
+                  disabled={!hasPendingFilterDraftChanges && !hasAnyInventoryFiltersActive}
                   className="rounded-xl border border-amber-400/70 bg-amber-500/15 px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-amber-100 hover:bg-amber-500/25 disabled:opacity-50"
                 >
                   Aplicar filtros
