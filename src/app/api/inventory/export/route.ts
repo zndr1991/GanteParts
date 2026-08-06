@@ -49,6 +49,17 @@ const toText = (value: unknown) => {
   return String(value).trim();
 };
 
+const buildYearRangeText = (fromValue: unknown, toValue: unknown) => {
+  const from = toText(fromValue);
+  const to = toText(toValue);
+  if (!from && !to) return "";
+  if (from && to) {
+    if (from === to) return from;
+    return `${from} AL ${to}`;
+  }
+  return from || to;
+};
+
 const firstNonEmpty = (...values: unknown[]) => {
   for (const value of values) {
     const normalized = toText(value);
@@ -83,7 +94,7 @@ const fieldHeaders: Record<ExportFieldKey, string> = {
   mlItemId: "CODIGO ML",
   estatusInterno: "ESTATUS INTERNO",
   precio: "PRECIO",
-  descripcion: "DESCRIPCION",
+  descripcion: "TITULO ML",
   descripcionLocal: "DESCRIPCION LOCAL",
   alto: "ALTO",
   largo: "LARGO",
@@ -112,8 +123,17 @@ const buildFieldValue = (field: ExportFieldKey, item: InventoryExportRecord, ext
       return normalizeInternalStatus(extra.estatus_interno);
     case "precio":
       return toNumberOrEmpty(item.price);
-    case "descripcion":
-      return firstNonEmpty(item.title, extra.descripcion_ml, extra.descripcion, extra.pieza);
+    case "descripcion": {
+      const yearRange = buildYearRangeText(extra.ano_desde, extra.ano_hasta);
+      const titleParts = [
+        toText(extra.pieza),
+        toText(extra.coche),
+        toText(extra.version),
+        yearRange,
+        item.skuInternal
+      ].filter((part) => part.length);
+      return titleParts.length ? titleParts.join(" ") : firstNonEmpty(item.title, extra.descripcion_ml, extra.descripcion);
+    }
     case "descripcionLocal":
       return toText(extra.descripcion_local);
     case "alto":

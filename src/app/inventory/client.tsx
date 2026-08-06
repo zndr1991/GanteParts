@@ -191,7 +191,7 @@ const INVENTORY_EXPORT_FIELD_DEFINITIONS = [
   { key: "mlItemId", label: "Codigo ML" },
   { key: "estatusInterno", label: "Estatus interno" },
   { key: "precio", label: "Precio" },
-  { key: "descripcion", label: "Descripcion" },
+  { key: "descripcion", label: "Titulo ML" },
   { key: "descripcionLocal", label: "Descripcion local" },
   { key: "alto", label: "Alto" },
   { key: "largo", label: "Largo" },
