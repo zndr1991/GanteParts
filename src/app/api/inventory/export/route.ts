@@ -85,6 +85,49 @@ const toNumberOrEmpty = (value: Prisma.Decimal | null) => {
   return parsed;
 };
 
+const NUEVO_ORIGINAL_DESCRIPCION =
+  "PIEZA NUEVA ORIGINAL PUEDE QUE TENGA RASPONES DE ALMACENAMIENTO QUE NO AFECTAN EN NADA A SU FUNCIONAMIENTO.\n" +
+  "SI NECESITA MAS FOTOS ENVIE MENSAJE ESTAREMOS AL PENDIENTE PARA RESPONDER LO MAS PRONTO POSIBLE.\n\n" +
+  "SI FACTURAMOS, PRECIO YA INCLUYE IVA";
+
+const NUEVO_ORIGINAL_DETALLE_DESCRIPCION =
+  "PIEZA ORIGINAL CON DANOS APRECIABLES EN FOTOS SI NECESITA MAS FOTOS ENVIE MENSAJE ESTAREMOS AL PENDIENTE PARA RESPONDER LO MAS PRONTO POSIBLE (NUEVO SE REFIERE A QUE NUNCA FUE INSTALADA). SI FACTURAMOS, PRECIO YA INCLUYE IVA";
+
+const TW_GENERICO_DESCRIPCION =
+  "PIEZA NUEVA TW/GENERICA/NO ORIGINAL\nSI NECESITA MAS FOTOS ENVIE MENSAJE ESTAREMOS AL PENDIENTE PARA RESPONDER LO MAS PRONTO POSIBLE. SI FACTURAMOS, PRECIO YA INCLUYE IVA";
+
+const TW_GENERICO_DETALLE_DESCRIPCION =
+  "PIEZA TW/GENERICA/NO ORIGINAL CON DANOS APRECIABLES EN FOTOS\nSI NECESITA MAS FOTOS ENVIE MENSAJE ESTAREMOS AL PENDIENTE PARA RESPONDER LO MAS PRONTO POSIBLE. SI FACTURAMOS, PRECIO YA INCLUYE IVA";
+
+const USADO_ORIGINAL_SANO_DESCRIPCION =
+  "PIEZA USADA ORIGINAL EN BUENAS CONDICIONES\nSI NECESITA MAS FOTOS ENVIE MENSAJE ESTAREMOS AL PENDIENTE PARA RESPONDER LO MAS PRONTO POSIBLE. SI FACTURAMOS, PRECIO YA INCLUYE IVA";
+
+const USADO_ORIGINAL_DETALLE_DESCRIPCION =
+  "PIEZA CON DANOS APRECIABLES EN FOTOS SI NECESITA MAS FOTOS ENVIE MENSAJE ESTAREMOS AL PENDIENTE PARA RESPONDER LO MAS PRONTO POSIBLE. SI FACTURAMOS, PRECIO YA INCLUYE IVA";
+
+const buildDescripcionLocalValue = (item: InventoryExportRecord, extra: Record<string, unknown>) => {
+  const base = firstNonEmpty(extra.descripcion_local, extra.descripcionLocal);
+  const origen = toText(extra.origen).toUpperCase();
+  const withPrefix = (template: string) => (base.length ? `${base}\n\n${template}` : template);
+
+  switch (origen) {
+    case "NUEVO ORIGINAL":
+      return withPrefix(NUEVO_ORIGINAL_DESCRIPCION);
+    case "NUEVO ORIGINAL CON DETALLE":
+      return withPrefix(NUEVO_ORIGINAL_DETALLE_DESCRIPCION);
+    case "TW/GENERICO":
+      return withPrefix(TW_GENERICO_DESCRIPCION);
+    case "TW/GENERICO CON DETALLE":
+      return withPrefix(TW_GENERICO_DETALLE_DESCRIPCION);
+    case "USADO ORIGINAL SANO":
+      return withPrefix(USADO_ORIGINAL_SANO_DESCRIPCION);
+    case "USADO ORIGINAL CON DETALLE":
+      return withPrefix(USADO_ORIGINAL_DETALLE_DESCRIPCION);
+    default:
+      return firstNonEmpty(base, extra.descripcion_ml, extra.descripcion, item.title);
+  }
+};
+
 const fieldHeaders: Record<ExportFieldKey, string> = {
   skuInternal: "SKU",
   marca: "MARCA",
@@ -135,7 +178,7 @@ const buildFieldValue = (field: ExportFieldKey, item: InventoryExportRecord, ext
       return titleParts.length ? titleParts.join(" ") : firstNonEmpty(item.title, extra.descripcion_ml, extra.descripcion);
     }
     case "descripcionLocal":
-      return toText(extra.descripcion_local);
+      return buildDescripcionLocalValue(item, extra);
     case "alto":
       return toText(extra.alto);
     case "largo":
