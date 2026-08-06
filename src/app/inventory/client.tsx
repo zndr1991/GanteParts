@@ -182,6 +182,32 @@ type InventorySearchWorkerResultMessage = {
 
 type InventoryPageSizeOption = 100 | 200 | 500 | "ALL";
 
+const INVENTORY_EXPORT_FIELD_DEFINITIONS = [
+  { key: "skuInternal", label: "SKU" },
+  { key: "marca", label: "Marca" },
+  { key: "coche", label: "Coche" },
+  { key: "anoDesde", label: "Ano desde" },
+  { key: "anoHasta", label: "Ano hasta" },
+  { key: "mlItemId", label: "Codigo ML" },
+  { key: "estatusInterno", label: "Estatus interno" },
+  { key: "precio", label: "Precio" },
+  { key: "descripcion", label: "Descripcion" },
+  { key: "descripcionLocal", label: "Descripcion local" },
+  { key: "alto", label: "Alto" },
+  { key: "largo", label: "Largo" },
+  { key: "ancho", label: "Ancho" },
+  { key: "peso", label: "Peso" },
+  { key: "formaPublicacion", label: "Forma publicacion" },
+  { key: "observaciones", label: "Observaciones" },
+  { key: "compatibilidades", label: "Compatibilidades" }
+] as const;
+
+type InventoryExportFieldKey = (typeof INVENTORY_EXPORT_FIELD_DEFINITIONS)[number]["key"];
+
+const DEFAULT_INVENTORY_EXPORT_FIELDS: InventoryExportFieldKey[] = INVENTORY_EXPORT_FIELD_DEFINITIONS.map(
+  (entry) => entry.key
+);
+
 const brandOptions = [
   "ACURA",
   "AUDI",
@@ -763,6 +789,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   const [manualTab, setManualTab] = useState<"capture" | "nomenclatures">("capture");
   const [items, setItems] = useState<Item[]>(initialPage.items);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectedExportFields, setSelectedExportFields] = useState<InventoryExportFieldKey[]>(
+    DEFAULT_INVENTORY_EXPORT_FIELDS
+  );
+  const [exportingSelectedRows, setExportingSelectedRows] = useState(false);
   const [search, setSearch] = useState("");
   const [searchDraft, setSearchDraft] = useState("");
   const [focusedRowInfo, setFocusedRowInfo] = useState<FocusedInfo | null>(null);
@@ -888,6 +918,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   const lastManualSuggestionPrefixRef = useRef<string | null>(null);
   const isMountedRef = useRef(true);
   const desktopTableContainerRef = useRef<HTMLDivElement | null>(null);
+  const desktopSelectAllRef = useRef<HTMLInputElement | null>(null);
   const localEstatusInternoRef = useRef(
     new Map<string, { value: string; updatedAt: number; prestadoVendidoA?: string | null }>()
   );
@@ -4251,7 +4282,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
       prestadoDebtorFilters: normalizedStatusFilter === "PRESTADO" ? normalizedPrestadoDebtorFilters : [],
       includeMeta: shouldIncludeMeta,
       includeFacetOptions: shouldIncludeFacetOptions,
-      preserveSelection: false
+      preserveSelection: !filtersChanged
     });
   }, [
     fetchInventoryPage,
@@ -4629,6 +4660,21 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   const paginatedVisibleEnd = Math.min(inventoryPage * effectiveInventoryPageSize, visibleBaseTotal);
 
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const currentPageSelectionIds = useMemo(
+    () => paginatedFilteredItems.map((item) => item.id),
+    [paginatedFilteredItems]
+  );
+  const selectedInCurrentPageCount = useMemo(() => {
+    if (!currentPageSelectionIds.length) return 0;
+    return currentPageSelectionIds.reduce(
+      (count, id) => (selectedIdSet.has(id) ? count + 1 : count),
+      0
+    );
+  }, [currentPageSelectionIds, selectedIdSet]);
+  const allCurrentPageSelected =
+    currentPageSelectionIds.length > 0 && selectedInCurrentPageCount === currentPageSelectionIds.length;
+  const someCurrentPageSelected = selectedInCurrentPageCount > 0 && !allCurrentPageSelected;
+  const allExportFieldsSelected = selectedExportFields.length === INVENTORY_EXPORT_FIELD_DEFINITIONS.length;
 
   const virtualizedDesktopRows = useMemo(() => {
     const totalRows = paginatedFilteredItems.length;
@@ -4658,6 +4704,90 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
       bottomSpacerHeight: Math.max(0, (totalRows - endIndex) * tableRowHeight)
     };
   }, [paginatedFilteredItems, shouldVirtualizeDesktop, tableRowHeight, tableScrollRowStart, tableViewportHeight]);
+
+  useEffect(() => {
+    if (!desktopSelectAllRef.current) return;
+    desktopSelectAllRef.current.indeterminate = someCurrentPageSelected;
+  }, [someCurrentPageSelected]);
+
+  const setCurrentPageSelection = useCallback(
+    (checked: boolean) => {
+      if (!currentPageSelectionIds.length) return;
+      setSelectedIds((current) => {
+        const next = new Set(current);
+        currentPageSelectionIds.forEach((id) => {
+          if (checked) {
+            next.add(id);
+          } else {
+            next.delete(id);
+          }
+        });
+        return Array.from(next);
+      });
+    },
+    [currentPageSelectionIds]
+  );
+
+  const toggleReportField = useCallback((field: InventoryExportFieldKey) => {
+    setSelectedExportFields((current) => {
+      const next = new Set(current);
+      if (next.has(field)) {
+        next.delete(field);
+      } else {
+        next.add(field);
+      }
+      return INVENTORY_EXPORT_FIELD_DEFINITIONS.map((entry) => entry.key).filter((entry) => next.has(entry));
+    });
+  }, []);
+
+  const exportSelectedRowsToExcel = useCallback(async () => {
+    if (!selectedIds.length) {
+      setMessage("Selecciona al menos un renglon para exportar");
+      return;
+    }
+    if (!selectedExportFields.length) {
+      setMessage("Selecciona al menos un campo para el reporte");
+      return;
+    }
+
+    setExportingSelectedRows(true);
+    setMessage(null);
+
+    try {
+      const response = await fetch("/api/inventory/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ids: selectedIds,
+          fields: selectedExportFields
+        })
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || "No se pudo generar el reporte");
+      }
+
+      const fileBlob = await response.blob();
+      const downloadUrl = URL.createObjectURL(fileBlob);
+      const link = document.createElement("a");
+      const dateLabel = new Date().toISOString().slice(0, 10);
+      link.href = downloadUrl;
+      link.download = `reporte-inventario-${dateLabel}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(downloadUrl);
+
+      const exportedCountHeader = Number.parseInt(response.headers.get("x-export-count") ?? "", 10);
+      const exportedCount = Number.isFinite(exportedCountHeader) ? exportedCountHeader : selectedIds.length;
+      setMessage(`Reporte generado (${exportedCount} renglones)`);
+    } catch (err: any) {
+      setMessage(err?.message || "No se pudo generar el reporte");
+    } finally {
+      setExportingSelectedRows(false);
+    }
+  }, [selectedExportFields, selectedIds]);
 
   useEffect(() => {
     if (isMobile) return;
@@ -6137,6 +6267,86 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                 )}
               </div>
             )}
+
+            <div className="mt-3 rounded-2xl border border-slate-700 bg-slate-950/45 p-3">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="space-y-1">
+                  <p className="text-[11px] uppercase tracking-[0.25em] text-slate-400">Seleccion masiva</p>
+                  <p className="text-sm text-slate-200">
+                    {selectedIds.length} seleccionados en total · {selectedInCurrentPageCount} en esta pagina
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setCurrentPageSelection(!allCurrentPageSelected)}
+                    disabled={!currentPageSelectionIds.length}
+                    className="rounded-md border border-slate-600 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-200 hover:border-amber-400 disabled:opacity-50"
+                  >
+                    {allCurrentPageSelected ? "Quitar pagina" : `Seleccionar pagina (${currentPageSelectionIds.length})`}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedIds([])}
+                    disabled={!selectedIds.length}
+                    className="rounded-md border border-slate-600 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-200 hover:border-amber-400 disabled:opacity-50"
+                  >
+                    Limpiar seleccion
+                  </button>
+                  <button
+                    type="button"
+                    onClick={exportSelectedRowsToExcel}
+                    disabled={!selectedIds.length || !selectedExportFields.length || exportingSelectedRows}
+                    className="rounded-md border border-emerald-400/70 bg-emerald-500/15 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-emerald-100 hover:bg-emerald-500/25 disabled:opacity-50"
+                  >
+                    {exportingSelectedRows ? "Generando..." : "Sacar reporte Excel"}
+                  </button>
+                </div>
+              </div>
+
+              <details className="mt-3 rounded-xl border border-slate-700 bg-slate-900/50 px-3 py-2">
+                <summary className="cursor-pointer select-none text-xs font-semibold uppercase tracking-wide text-slate-200">
+                  Campos del reporte ({selectedExportFields.length}/{INVENTORY_EXPORT_FIELD_DEFINITIONS.length})
+                </summary>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedExportFields(DEFAULT_INVENTORY_EXPORT_FIELDS)}
+                    disabled={allExportFieldsSelected}
+                    className="rounded-md border border-slate-600 px-2 py-1 text-[11px] text-slate-200 hover:border-amber-300 disabled:opacity-50"
+                  >
+                    Marcar todos
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedExportFields([])}
+                    disabled={!selectedExportFields.length}
+                    className="rounded-md border border-slate-600 px-2 py-1 text-[11px] text-slate-200 hover:border-amber-300 disabled:opacity-50"
+                  >
+                    Quitar todos
+                  </button>
+                </div>
+                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                  {INVENTORY_EXPORT_FIELD_DEFINITIONS.map((field) => {
+                    const checked = selectedExportFields.includes(field.key);
+                    return (
+                      <label
+                        key={field.key}
+                        className="inline-flex items-center gap-2 rounded-md border border-slate-700 bg-slate-950/70 px-2 py-1.5 text-xs text-slate-200"
+                      >
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-amber-400 focus:ring-amber-400"
+                          checked={checked}
+                          onChange={() => toggleReportField(field.key)}
+                        />
+                        {field.label}
+                      </label>
+                    );
+                  })}
+                </div>
+              </details>
+            </div>
           </div>
           <div className="hidden rounded-2xl border border-slate-700 bg-slate-900/50 p-4">
             <div className="flex items-center justify-between gap-3">
@@ -6547,7 +6757,21 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
               <table className="min-w-[1550px] w-full border-collapse text-sm">
                 <thead className="sticky top-0 z-10 bg-slate-900/90 text-xs font-semibold uppercase tracking-widest text-slate-400">
                   <tr>
-                    <th className="px-4 py-3 text-left">Sel</th>
+                    <th className="px-4 py-3 text-left">
+                      <label className="inline-flex items-center gap-2">
+                        <input
+                          ref={desktopSelectAllRef}
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-amber-400 focus:ring-amber-400"
+                          checked={allCurrentPageSelected}
+                          onChange={(event) => {
+                            event.stopPropagation();
+                            setCurrentPageSelection(event.target.checked);
+                          }}
+                        />
+                        <span>Sel</span>
+                      </label>
+                    </th>
                     <th className="px-4 py-3 text-left">Editar</th>
                     <th className="px-4 py-3 text-left">
                       <div className="flex items-center gap-2">
