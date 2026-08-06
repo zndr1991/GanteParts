@@ -49,6 +49,35 @@ const toText = (value: unknown) => {
   return String(value).trim();
 };
 
+const normalizeWordForComparison = (word: string) => {
+  return word
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+};
+
+const collapseConsecutiveDuplicateWords = (value: string) => {
+  const tokens = value
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length);
+
+  const result: string[] = [];
+  let previousNormalized = "";
+
+  tokens.forEach((token) => {
+    const normalized = normalizeWordForComparison(token);
+    if (normalized.length && normalized === previousNormalized) {
+      return;
+    }
+    result.push(token);
+    previousNormalized = normalized;
+  });
+
+  return result.join(" ");
+};
+
 const buildYearRangeText = (fromValue: unknown, toValue: unknown) => {
   const from = toText(fromValue);
   const to = toText(toValue);
@@ -267,7 +296,10 @@ const buildFieldValue = (field: ExportFieldKey, item: InventoryExportRecord, ext
         yearRange,
         item.skuInternal
       ].filter((part) => part.length);
-      return titleParts.length ? titleParts.join(" ") : firstNonEmpty(item.title, extra.descripcion_ml, extra.descripcion);
+      const rawTitle = titleParts.length
+        ? titleParts.join(" ")
+        : firstNonEmpty(item.title, extra.descripcion_ml, extra.descripcion);
+      return collapseConsecutiveDuplicateWords(rawTitle);
     }
     case "descripcionLocal":
       return buildDescripcionLocalValue(item, extra);
