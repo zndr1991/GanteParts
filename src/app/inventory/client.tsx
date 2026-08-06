@@ -523,6 +523,41 @@ const sanitizePhotos = (value: any) => {
     .slice(0, MAX_PHOTOS);
 };
 
+const sanitizeDownloadNamePart = (value: string) => {
+  const cleaned = value
+    .replace(/[\\/:*?"<>|]+/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned.length ? cleaned : "ITEM";
+};
+
+const inferPhotoExtension = (src: string, mimeType?: string | null) => {
+  const mime = (mimeType ?? "").toLowerCase();
+  if (mime.startsWith("image/")) {
+    const subtype = mime.slice("image/".length).split(";")[0].trim();
+    if (subtype === "jpeg") return "jpg";
+    if (subtype === "svg+xml") return "svg";
+    if (subtype.length) return subtype.replace(/[^a-z0-9]/g, "") || "jpg";
+  }
+
+  const dataMatch = src.match(/^data:image\/([a-z0-9.+-]+);/i);
+  if (dataMatch) {
+    const subtype = dataMatch[1].toLowerCase();
+    if (subtype === "jpeg") return "jpg";
+    if (subtype === "svg+xml") return "svg";
+    return subtype.replace(/[^a-z0-9]/g, "") || "jpg";
+  }
+
+  const srcWithoutQuery = src.split("?")[0]?.split("#")[0] ?? "";
+  const extMatch = srcWithoutQuery.match(/\.([a-z0-9]{2,5})$/i);
+  if (extMatch) {
+    const ext = extMatch[1].toLowerCase();
+    return ext === "jpeg" ? "jpg" : ext;
+  }
+
+  return "jpg";
+};
+
 const toFocusedInfo = (item?: Item | null): FocusedInfo | null => {
   if (!item) return null;
   const extra = item.extraData ?? {};
@@ -886,6 +921,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   const [photoModal, setPhotoModal] = useState<{ id: string; title: string } | null>(null);
   const [modalPhotos, setModalPhotos] = useState<string[]>([]);
   const [photoModalSaving, setPhotoModalSaving] = useState(false);
+  const [photoModalDownloading, setPhotoModalDownloading] = useState(false);
   const [editingRowId] = useState<string | null>(null);
   const [sortConfig, setSortConfig] = useState<{
     key: SortKey;
@@ -2360,6 +2396,59 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
       setPhotoModalSaving(false);
     }
   };
+
+  const downloadAllModalPhotos = useCallback(async () => {
+    if (!modalPhotos.length) {
+      setPhotoModalError("No hay fotos para descargar");
+      return;
+    }
+
+    const baseSku = sanitizeDownloadNamePart((photoModal?.title ?? "ITEM").toString().toUpperCase());
+    setPhotoModalError(null);
+    setPhotoModalDownloading(true);
+
+    let successCount = 0;
+    const failedIndexes: number[] = [];
+
+    try {
+      for (let index = 0; index < modalPhotos.length; index += 1) {
+        const src = modalPhotos[index];
+        try {
+          const response = await fetch(src, { cache: "no-store" });
+          if (!response.ok) {
+            throw new Error(`No se pudo descargar la foto ${index + 1}`);
+          }
+          const blob = await response.blob();
+          const ext = inferPhotoExtension(src, blob.type);
+          const fileName = `${baseSku}-${index + 1}.${ext}`;
+          const objectUrl = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = objectUrl;
+          link.download = fileName;
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          URL.revokeObjectURL(objectUrl);
+          successCount += 1;
+        } catch {
+          failedIndexes.push(index + 1);
+        }
+      }
+
+      if (failedIndexes.length) {
+        const failedText = failedIndexes.join(", ");
+        setPhotoModalError(
+          `Se descargaron ${successCount}/${modalPhotos.length} fotos. Fallaron: ${failedText}`
+        );
+      } else {
+        setMessage(
+          `Descarga iniciada: ${successCount} foto${successCount === 1 ? "" : "s"} (${baseSku}-1, ${baseSku}-2...)`
+        );
+      }
+    } finally {
+      setPhotoModalDownloading(false);
+    }
+  }, [modalPhotos, photoModal?.title]);
 
   const showPrevModalPhoto = () => {
     if (!modalPhotos.length) return;
@@ -7842,6 +7931,14 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                 </div>
               </div>
               <div className="flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  className="rounded-md border border-cyan-400/60 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-cyan-100 hover:bg-cyan-500/10 disabled:opacity-60"
+                  onClick={downloadAllModalPhotos}
+                  disabled={photoModalLoading || !modalPhotos.length || photoModalDownloading}
+                >
+                  {photoModalDownloading ? "Descargando..." : "Descargar todas"}
+                </button>
                 <button
                   type="button"
                   className="rounded-md border border-slate-600 px-4 py-2 text-xs text-slate-200 hover:border-amber-300"
