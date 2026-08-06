@@ -60,6 +60,41 @@ const buildYearRangeText = (fromValue: unknown, toValue: unknown) => {
   return from || to;
 };
 
+const parseYearFromValue = (value: unknown) => {
+  const match = toText(value).match(/\d{4}/);
+  if (!match) return null;
+  const year = Number.parseInt(match[0], 10);
+  if (!Number.isFinite(year) || year < 1900 || year > 2100) return null;
+  return year;
+};
+
+const buildExpandedYearsText = (fromValue: unknown, toValue: unknown) => {
+  const fromYear = parseYearFromValue(fromValue);
+  const toYear = parseYearFromValue(toValue);
+
+  if (fromYear !== null && toYear !== null) {
+    const minYear = Math.min(fromYear, toYear);
+    const maxYear = Math.max(fromYear, toYear);
+    const span = Math.min(maxYear - minYear, 120);
+    const years: string[] = [];
+    for (let year = minYear; year <= minYear + span; year += 1) {
+      years.push(String(year));
+    }
+    return years.join(" ");
+  }
+
+  if (fromYear !== null) return String(fromYear);
+  if (toYear !== null) return String(toYear);
+
+  const fromText = toText(fromValue);
+  const toTextValue = toText(toValue);
+  if (fromText && toTextValue) {
+    if (fromText === toTextValue) return fromText;
+    return `${fromText} ${toTextValue}`;
+  }
+  return fromText || toTextValue;
+};
+
 const firstNonEmpty = (...values: unknown[]) => {
   for (const value of values) {
     const normalized = toText(value);
@@ -109,22 +144,39 @@ const buildDescripcionLocalValue = (item: InventoryExportRecord, extra: Record<s
   const base = firstNonEmpty(extra.descripcion_local, extra.descripcionLocal);
   const origen = toText(extra.origen).toUpperCase();
   const withPrefix = (template: string) => (base.length ? `${base}\n\n${template}` : template);
+  const yearsExpanded = buildExpandedYearsText(extra.ano_desde, extra.ano_hasta);
+  const compatibilidadesValue = firstNonEmpty(extra.compatibilidades, extra.compatibilidad);
+  const detailsLine = [
+    toText(extra.pieza),
+    toText(extra.marca),
+    toText(extra.coche),
+    toText(extra.version),
+    yearsExpanded
+  ]
+    .filter((part) => part.length)
+    .join(" ");
+  const footerLines = [
+    detailsLine.length ? `${detailsLine} /COMPATIBILIDADES` : "COMPATIBILIDADES",
+    compatibilidadesValue || "SIN COMPATIBILIDADES",
+    "GantePartsGDL"
+  ].join("\n");
+  const attachFooter = (content: string) => (content.length ? `${content}\n\n${footerLines}` : footerLines);
 
   switch (origen) {
     case "NUEVO ORIGINAL":
-      return withPrefix(NUEVO_ORIGINAL_DESCRIPCION);
+      return attachFooter(withPrefix(NUEVO_ORIGINAL_DESCRIPCION));
     case "NUEVO ORIGINAL CON DETALLE":
-      return withPrefix(NUEVO_ORIGINAL_DETALLE_DESCRIPCION);
+      return attachFooter(withPrefix(NUEVO_ORIGINAL_DETALLE_DESCRIPCION));
     case "TW/GENERICO":
-      return withPrefix(TW_GENERICO_DESCRIPCION);
+      return attachFooter(withPrefix(TW_GENERICO_DESCRIPCION));
     case "TW/GENERICO CON DETALLE":
-      return withPrefix(TW_GENERICO_DETALLE_DESCRIPCION);
+      return attachFooter(withPrefix(TW_GENERICO_DETALLE_DESCRIPCION));
     case "USADO ORIGINAL SANO":
-      return withPrefix(USADO_ORIGINAL_SANO_DESCRIPCION);
+      return attachFooter(withPrefix(USADO_ORIGINAL_SANO_DESCRIPCION));
     case "USADO ORIGINAL CON DETALLE":
-      return withPrefix(USADO_ORIGINAL_DETALLE_DESCRIPCION);
+      return attachFooter(withPrefix(USADO_ORIGINAL_DETALLE_DESCRIPCION));
     default:
-      return firstNonEmpty(base, extra.descripcion_ml, extra.descripcion, item.title);
+      return attachFooter(firstNonEmpty(base, extra.descripcion_ml, extra.descripcion, item.title));
   }
 };
 
