@@ -19,8 +19,8 @@ const EXPORT_FIELD_KEYS = [
   "precio",
   "descripcion",
   "descripcionLocal",
-  "alto",
   "largo",
+  "alto",
   "ancho",
   "peso",
   "formaPublicacion",
@@ -230,9 +230,9 @@ const fieldHeaders: Record<ExportFieldKey, string> = {
   precio: "PRECIO",
   descripcion: "TITULO ML",
   descripcionLocal: "DESCRIPCION LOCAL",
+  largo: "ANCHO",
   alto: "ALTO",
-  largo: "LARGO",
-  ancho: "ANCHO",
+  ancho: "PROFUNDIDAD",
   peso: "PESO",
   formaPublicacion: "FORMA PUBLICACION",
   observaciones: "OBSERVACIONES",
@@ -261,7 +261,7 @@ const buildFieldValue = (field: ExportFieldKey, item: InventoryExportRecord, ext
       const yearRange = buildYearRangeText(extra.ano_desde, extra.ano_hasta);
       const titleParts = [
         toText(extra.pieza),
-        toText(extra.coche),
+        toText(extra.marca),
         toText(extra.version),
         yearRange,
         item.skuInternal
