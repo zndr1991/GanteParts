@@ -95,6 +95,39 @@ const buildExpandedYearsText = (fromValue: unknown, toValue: unknown) => {
   return fromText || toTextValue;
 };
 
+const buildExpandedYearsSequence = (fromYear: number, toYear: number) => {
+  const minYear = Math.min(fromYear, toYear);
+  const maxYear = Math.max(fromYear, toYear);
+  const span = Math.min(maxYear - minYear, 120);
+  const years: string[] = [];
+  for (let year = minYear; year <= minYear + span; year += 1) {
+    years.push(String(year));
+  }
+  return years.join(" ");
+};
+
+const expandYearRangesInText = (value: unknown) => {
+  const raw = toText(value);
+  if (!raw) return "";
+
+  const expandRange = (_match: string, fromRaw: string, toRaw: string) => {
+    const fromYear = Number.parseInt(fromRaw, 10);
+    const toYear = Number.parseInt(toRaw, 10);
+    if (!Number.isFinite(fromYear) || !Number.isFinite(toYear)) {
+      return _match;
+    }
+    if (fromYear < 1900 || fromYear > 2100 || toYear < 1900 || toYear > 2100) {
+      return _match;
+    }
+    return buildExpandedYearsSequence(fromYear, toYear);
+  };
+
+  let expanded = raw;
+  expanded = expanded.replace(/\b(\d{4})\s*-\s*(\d{4})\b/g, expandRange);
+  expanded = expanded.replace(/\b(\d{4})\s+AL\s+(\d{4})\b/gi, expandRange);
+  return expanded;
+};
+
 const firstNonEmpty = (...values: unknown[]) => {
   for (const value of values) {
     const normalized = toText(value);
@@ -145,7 +178,8 @@ const buildDescripcionLocalValue = (item: InventoryExportRecord, extra: Record<s
   const origen = toText(extra.origen).toUpperCase();
   const withPrefix = (template: string) => (base.length ? `${base}\n\n${template}` : template);
   const yearsExpanded = buildExpandedYearsText(extra.ano_desde, extra.ano_hasta);
-  const compatibilidadesValue = firstNonEmpty(extra.compatibilidades, extra.compatibilidad);
+  const compatibilidadesValue = expandYearRangesInText(firstNonEmpty(extra.compatibilidades, extra.compatibilidad));
+  const observacionesValue = toText(extra.observaciones);
   const detailsLine = [
     toText(extra.pieza),
     toText(extra.marca),
@@ -155,9 +189,14 @@ const buildDescripcionLocalValue = (item: InventoryExportRecord, extra: Record<s
   ]
     .filter((part) => part.length)
     .join(" ");
+  const firstFooterLine = detailsLine.length
+    ? compatibilidadesValue.length
+      ? `${detailsLine} /${compatibilidadesValue}`
+      : detailsLine
+    : compatibilidadesValue;
   const footerLines = [
-    detailsLine.length ? `${detailsLine} /COMPATIBILIDADES` : "COMPATIBILIDADES",
-    compatibilidadesValue || "SIN COMPATIBILIDADES",
+    firstFooterLine,
+    observacionesValue,
     "GantePartsGDL"
   ].join("\n");
   const attachFooter = (content: string) => (content.length ? `${content}\n\n${footerLines}` : footerLines);
