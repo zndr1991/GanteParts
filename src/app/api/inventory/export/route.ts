@@ -306,9 +306,9 @@ const buildFieldValue = (field: ExportFieldKey, item: InventoryExportRecord, ext
     case "alto":
       return toText(extra.alto);
     case "largo":
-      return toText(extra.largo);
-    case "ancho":
       return toText(extra.ancho);
+    case "ancho":
+      return toText(extra.largo);
     case "peso":
       return toText(extra.peso);
     case "formaPublicacion":
