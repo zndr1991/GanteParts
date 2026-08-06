@@ -5108,7 +5108,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                 </a>
               </div>
             </div>
-            <p className="mt-3 text-sm text-slate-300">Carga manual o importa Excel. Encabezados aceptados: SKU/CODIGO, DESCRIPCION o DESCRIPCION ML o DESCRIPCION LOCAL, PRECIO, INVENTARIO/STOCK/CANTIDAD, CODIGO DE MERCADO LIBRE, CODIGO UNIVERSAL, ESTATUS (active/paused/inactive), ESTATUS INTERNO, ORIGEN, MARCA, COCHE, VERSION, AÑO DESDE, AÑO HASTA, UBICACION, FACEBOOK, PIEZA, ALTO, LARGO, ANCHO, PESO, FORMA DE PUBLICACION, OBSERVACIONES, COMPATIBILIDADES.</p>
+            <p className="mt-3 text-sm text-slate-300">Carga manual o importa Excel. Encabezados aceptados: SKU/CODIGO, DESCRIPCION o DESCRIPCION ML o DESCRIPCION LOCAL, PRECIO, INVENTARIO/STOCK/CANTIDAD, CODIGO DE MERCADO LIBRE, CODIGO UNIVERSAL, ESTATUS (active/paused/inactive), ESTATUS INTERNO, ORIGEN, MARCA, COCHE, VERSION, AÑO DESDE, AÑO HASTA, UBICACION, FACEBOOK, PIEZA, ANCHO, ALTO, PROFUNDIDAD, PESO, FORMA DE PUBLICACION, OBSERVACIONES, COMPATIBILIDADES.</p>
           </header>
   {!isManualOnly && (
   <section className="bg-slate-900/70 border border-slate-700 rounded-2xl p-4 shadow space-y-3">
@@ -5410,19 +5410,19 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                       />
                       <input
                         className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
+                        placeholder="Ancho"
+                        value={form.largo}
+                        onChange={(e) => setForm((f) => ({ ...f, largo: e.target.value }))}
+                      />
+                      <input
+                        className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
                         placeholder="Alto"
                         value={form.alto}
                         onChange={(e) => setForm((f) => ({ ...f, alto: e.target.value }))}
                       />
                       <input
                         className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
-                        placeholder="Largo"
-                        value={form.largo}
-                        onChange={(e) => setForm((f) => ({ ...f, largo: e.target.value }))}
-                      />
-                      <input
-                        className="rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm"
-                        placeholder="Ancho"
+                        placeholder="Profundidad"
                         value={form.ancho}
                         onChange={(e) => setForm((f) => ({ ...f, ancho: e.target.value }))}
                       />
@@ -5852,9 +5852,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                                         Usa el boton Fotos para cargar imagenes faltantes y guardarlas en la publicacion.
                                       </p>
                                       <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-300">
+                                        <span>Ancho: {extra.largo ?? "-"}</span>
                                         <span>Alto: {extra.alto ?? "-"}</span>
-                                        <span>Largo: {extra.largo ?? "-"}</span>
-                                        <span>Ancho: {extra.ancho ?? "-"}</span>
+                                        <span>Profundidad: {extra.ancho ?? "-"}</span>
                                         <span>Peso: {extra.peso ?? "-"}</span>
                                         <span>Version: {extra.version ?? "-"}</span>
                                         <span>Forma: {extra.forma_publicacion ?? "-"}</span>
@@ -6135,7 +6135,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                     {uploadErrors.length > 5 && <div>... y mas ({uploadErrors.length - 5})</div>}
                   </div>
                 )}
-                <p className="text-xs text-slate-400">Encabezados soportados: ESTATUS, DESCRIPCION, DESCRIPCION ML, DESCRIPCION LOCAL, PRECIO, CODIGO, STOCK, CODIGO UNIVERSAL, CODIGO DE MERCADO LIBRE, ESTATUS INTERNO, ORIGEN, MARCA, COCHE, VERSION, AÑO DESDE, AÑO HASTA, UBICACION, FACEBOOK, PIEZA, ALTO, LARGO, ANCHO, PESO, FORMA DE PUBLICACION, OBSERVACIONES, COMPATIBILIDADES.</p>
+                <p className="text-xs text-slate-400">Encabezados soportados: ESTATUS, DESCRIPCION, DESCRIPCION ML, DESCRIPCION LOCAL, PRECIO, CODIGO, STOCK, CODIGO UNIVERSAL, CODIGO DE MERCADO LIBRE, ESTATUS INTERNO, ORIGEN, MARCA, COCHE, VERSION, AÑO DESDE, AÑO HASTA, UBICACION, FACEBOOK, PIEZA, ANCHO, ALTO, PROFUNDIDAD, PESO, FORMA DE PUBLICACION, OBSERVACIONES, COMPATIBILIDADES.</p>
               </>
             ) : (
               <p className="text-sm text-slate-400">

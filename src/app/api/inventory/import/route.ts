@@ -63,6 +63,7 @@ const headerMap: Record<string, string> = {
   "año hasta": "extra_ano_hasta",
   alto: "extra_alto",
   largo: "extra_largo",
+  profundidad: "extra_largo",
   ancho: "extra_ancho",
   peso: "extra_peso",
   formadepublicacion: "extra_forma_publicacion",
