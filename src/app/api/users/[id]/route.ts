@@ -32,12 +32,16 @@ const serializeUser = (user: {
   email: string;
   role: string;
   createdAt: Date;
+  _count: {
+    mercadoLibreAccounts: number;
+  };
 }) => ({
   id: user.id,
   name: user.name ?? "",
   email: user.email,
   role: user.role,
-  createdAt: user.createdAt.toISOString()
+  createdAt: user.createdAt.toISOString(),
+  hasMercadoLibreLinked: user._count.mercadoLibreAccounts > 0
 });
 
 async function ensureAdminSession() {
@@ -121,7 +125,12 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
         name: true,
         email: true,
         role: true,
-        createdAt: true
+        createdAt: true,
+        _count: {
+          select: {
+            mercadoLibreAccounts: true
+          }
+        }
       }
     });
 

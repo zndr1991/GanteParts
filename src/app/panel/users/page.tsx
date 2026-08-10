@@ -27,7 +27,12 @@ export default async function PanelUsersPage() {
       name: true,
       email: true,
       role: true,
-      createdAt: true
+      createdAt: true,
+      _count: {
+        select: {
+          mercadoLibreAccounts: true
+        }
+      }
     }
   });
 
@@ -36,7 +41,8 @@ export default async function PanelUsersPage() {
     name: user.name ?? "",
     email: user.email,
     role: user.role,
-    createdAt: user.createdAt.toISOString()
+    createdAt: user.createdAt.toISOString(),
+    hasMercadoLibreLinked: user._count.mercadoLibreAccounts > 0
   }));
 
   return (

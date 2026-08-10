@@ -62,7 +62,8 @@ export async function POST(req: Request) {
         name: created.name,
         email: created.email,
         role: created.role,
-        createdAt: created.createdAt.toISOString()
+        createdAt: created.createdAt.toISOString(),
+        hasMercadoLibreLinked: false
       }
     });
   } catch (error) {

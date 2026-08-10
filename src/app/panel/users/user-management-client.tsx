@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type UserSummary = {
   id: string;
@@ -9,6 +10,7 @@ type UserSummary = {
   email: string;
   role: string;
   createdAt: string;
+  hasMercadoLibreLinked: boolean;
 };
 
 type UserManagementClientProps = {
@@ -24,6 +26,32 @@ type RegisterResponse = {
 type UpdateResponse = {
   error?: string;
   user?: UserSummary;
+};
+
+type ResyncBatchStats = {
+  processed: number;
+  syncedOk: number;
+  warnings: number;
+  errors: number;
+  skippedNoMlItemId: number;
+  skippedNoPhotos: number;
+  skippedMissingAccount: number;
+  retriedItems: number;
+  retryAttemptsUsed: number;
+};
+
+type ResyncSummary = ResyncBatchStats & {
+  batches: number;
+  topReasons: Array<{ reason: string; count: number }>;
+};
+
+type ResyncBatchResponse = {
+  ok?: boolean;
+  error?: string;
+  hasMore?: boolean;
+  nextCursor?: string | null;
+  batch?: ResyncBatchStats;
+  reasons?: Array<{ reason: string; count: number }>;
 };
 
 const roles = [
@@ -42,7 +70,36 @@ const formatDateTime = (value: string) => {
   }).format(parsed);
 };
 
+const createEmptyResyncStats = (): ResyncBatchStats => ({
+  processed: 0,
+  syncedOk: 0,
+  warnings: 0,
+  errors: 0,
+  skippedNoMlItemId: 0,
+  skippedNoPhotos: 0,
+  skippedMissingAccount: 0,
+  retriedItems: 0,
+  retryAttemptsUsed: 0
+});
+
+const accumulateResyncStats = (target: ResyncBatchStats, batch: ResyncBatchStats) => {
+  target.processed += batch.processed;
+  target.syncedOk += batch.syncedOk;
+  target.warnings += batch.warnings;
+  target.errors += batch.errors;
+  target.skippedNoMlItemId += batch.skippedNoMlItemId;
+  target.skippedNoPhotos += batch.skippedNoPhotos;
+  target.skippedMissingAccount += batch.skippedMissingAccount;
+  target.retriedItems += batch.retriedItems;
+  target.retryAttemptsUsed += batch.retryAttemptsUsed;
+};
+
+const buildMlAuthLink = (userId: string) =>
+  `/api/mercadolibre/auth?targetUserId=${encodeURIComponent(userId)}&next=${encodeURIComponent("/panel/users")}`;
+
 export function UserManagementClient({ initialUsers, currentUserId }: UserManagementClientProps) {
+  const searchParams = useSearchParams();
+  const oauthHandledRef = useRef(false);
   const [form, setForm] = useState({ name: "", email: "", password: "", role: "operator" });
   const [users, setUsers] = useState<UserSummary[]>(initialUsers);
   const [editUserId, setEditUserId] = useState<string | null>(null);
@@ -52,6 +109,56 @@ export function UserManagementClient({ initialUsers, currentUserId }: UserManage
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState(false);
   const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
+  const [resyncing, setResyncing] = useState(false);
+  const [resyncProgress, setResyncProgress] = useState<string | null>(null);
+  const [resyncSummary, setResyncSummary] = useState<ResyncSummary | null>(null);
+
+  useEffect(() => {
+    if (oauthHandledRef.current) return;
+    if (searchParams.get("mlLinked") !== "1") return;
+
+    oauthHandledRef.current = true;
+    const linkedUserId = searchParams.get("mlLinkedUserId");
+
+    if (linkedUserId) {
+      setUsers((current) =>
+        current.map((user) =>
+          user.id === linkedUserId
+            ? {
+                ...user,
+                hasMercadoLibreLinked: true
+              }
+            : user
+        )
+      );
+      const linkedUser = users.find((entry) => entry.id === linkedUserId);
+      setSuccess(
+        linkedUser
+          ? `Mercado Libre vinculado para ${linkedUser.email}.`
+          : "Mercado Libre vinculado para el usuario seleccionado."
+      );
+    } else {
+      setUsers((current) =>
+        current.map((user) =>
+          user.id === currentUserId
+            ? {
+                ...user,
+                hasMercadoLibreLinked: true
+              }
+            : user
+        )
+      );
+      setSuccess("Cuenta de Mercado Libre vinculada correctamente.");
+    }
+
+    setError(null);
+    if (typeof window !== "undefined") {
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.delete("mlLinked");
+      nextUrl.searchParams.delete("mlLinkedUserId");
+      window.history.replaceState({}, "", `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
+    }
+  }, [currentUserId, searchParams, users]);
 
   const usersSorted = useMemo(() => {
     return [...users].sort((a, b) => {
@@ -66,6 +173,13 @@ export function UserManagementClient({ initialUsers, currentUserId }: UserManage
     if (!editUserId) return null;
     return users.find((user) => user.id === editUserId) ?? null;
   }, [users, editUserId]);
+
+  const linkedUsersCount = useMemo(
+    () => users.reduce((total, user) => total + (user.hasMercadoLibreLinked ? 1 : 0), 0),
+    [users]
+  );
+
+  const pendingLinkedUsersCount = Math.max(0, users.length - linkedUsersCount);
 
   const clearFeedback = () => {
     setError(null);
@@ -212,6 +326,83 @@ export function UserManagementClient({ initialUsers, currentUserId }: UserManage
     }
   };
 
+  const onRunMassivePhotoResync = async () => {
+    const confirmed = window.confirm(
+      "Se ejecutara una resincronizacion masiva de fotos hacia Mercado Libre. Continuar?"
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    clearFeedback();
+    setResyncing(true);
+    setResyncProgress("Iniciando resincronizacion...");
+    setResyncSummary(null);
+
+    const totals = createEmptyResyncStats();
+    const reasonMap = new Map<string, number>();
+    let cursor: string | null = null;
+    let batches = 0;
+
+    try {
+      while (true) {
+        const response = await fetch("/api/mercadolibre/resync/photos", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            cursor: cursor ?? undefined,
+            batchSize: 15,
+            retryCount: 2
+          })
+        });
+
+        const data = (await response.json().catch(() => ({}))) as ResyncBatchResponse;
+        if (!response.ok) {
+          throw new Error(data.error || "No se pudo ejecutar la resincronizacion");
+        }
+
+        const batch = data.batch ?? createEmptyResyncStats();
+        accumulateResyncStats(totals, batch);
+        batches += 1;
+
+        (data.reasons ?? []).forEach((entry) => {
+          if (!entry.reason.trim()) return;
+          reasonMap.set(entry.reason, (reasonMap.get(entry.reason) ?? 0) + entry.count);
+        });
+
+        setResyncProgress(
+          `Lote ${batches}: ${totals.processed} procesados | OK ${totals.syncedOk} | Avisos ${totals.warnings} | Errores ${totals.errors}`
+        );
+
+        cursor = data.nextCursor ?? null;
+        if (!data.hasMore || !cursor) {
+          break;
+        }
+      }
+
+      const topReasons = Array.from(reasonMap.entries())
+        .map(([reason, count]) => ({ reason, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 5);
+
+      setResyncSummary({
+        ...totals,
+        batches,
+        topReasons
+      });
+
+      setSuccess(
+        `Resincronizacion finalizada. Procesados: ${totals.processed} | OK: ${totals.syncedOk} | Avisos: ${totals.warnings} | Errores: ${totals.errors}`
+      );
+    } catch (resyncError) {
+      const message = resyncError instanceof Error ? resyncError.message : "No se pudo ejecutar la resincronizacion";
+      setError(message);
+    } finally {
+      setResyncing(false);
+      setResyncProgress(null);
+    }
+  };
+
   return (
     <section className="space-y-6 rounded-3xl border border-slate-800 bg-slate-900/60 p-6 shadow-xl">
       <div className="space-y-2">
@@ -220,6 +411,67 @@ export function UserManagementClient({ initialUsers, currentUserId }: UserManage
         <p className="text-sm text-slate-300">
           Crea nuevos usuarios del sistema. Esta opción ya no está disponible en el login público.
         </p>
+      </div>
+
+      <div className="space-y-3 rounded-2xl border border-slate-700 bg-slate-950/50 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-xs uppercase tracking-[0.25em] text-slate-300">Vinculacion Mercado Libre</p>
+            <p className="text-xs text-slate-400">
+              Los usuarios sin vinculacion veran errores de sincronizacion al ejecutar acciones ML.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs font-semibold">
+            <span className="rounded-full border border-emerald-400/50 bg-emerald-500/15 px-3 py-1 text-emerald-200">
+              Vinculados: {linkedUsersCount}
+            </span>
+            <span className="rounded-full border border-amber-400/50 bg-amber-500/15 px-3 py-1 text-amber-200">
+              Sin vincular: {pendingLinkedUsersCount}
+            </span>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={onRunMassivePhotoResync}
+            disabled={resyncing}
+            className="rounded-md border border-cyan-400/60 bg-cyan-500/10 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/20 disabled:opacity-60"
+          >
+            {resyncing ? "Resincronizando..." : "Resincronizar fotos ML (masivo)"}
+          </button>
+          {resyncProgress && <span className="text-xs text-slate-300">{resyncProgress}</span>}
+        </div>
+
+        {resyncSummary && (
+          <div className="grid grid-cols-1 gap-2 text-xs text-slate-200 md:grid-cols-4">
+            <div className="rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2">
+              <p className="text-slate-400">Procesados</p>
+              <p className="font-semibold text-white">{resyncSummary.processed}</p>
+            </div>
+            <div className="rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-3 py-2">
+              <p className="text-emerald-200">OK</p>
+              <p className="font-semibold text-emerald-100">{resyncSummary.syncedOk}</p>
+            </div>
+            <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2">
+              <p className="text-amber-200">Avisos</p>
+              <p className="font-semibold text-amber-100">{resyncSummary.warnings}</p>
+            </div>
+            <div className="rounded-lg border border-rose-400/30 bg-rose-500/10 px-3 py-2">
+              <p className="text-rose-200">Errores</p>
+              <p className="font-semibold text-rose-100">{resyncSummary.errors}</p>
+            </div>
+            <div className="md:col-span-4 rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-slate-300">
+              Lotes: {resyncSummary.batches} | Sin cuenta vinculada: {resyncSummary.skippedMissingAccount} | Sin fotos: {resyncSummary.skippedNoPhotos}
+              {resyncSummary.topReasons.length > 0 && (
+                <span>
+                  {" "}
+                  | Top motivos: {resyncSummary.topReasons.map((entry) => `${entry.reason} (${entry.count})`).join(" | ")}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       <form className="grid grid-cols-1 gap-3 rounded-2xl border border-slate-700 bg-slate-950/50 p-4 md:grid-cols-2" onSubmit={onSubmit}>
@@ -385,6 +637,7 @@ export function UserManagementClient({ initialUsers, currentUserId }: UserManage
                 <th className="px-4 py-2 text-left font-medium">Email</th>
                 <th className="px-4 py-2 text-left font-medium">Rol</th>
                 <th className="px-4 py-2 text-left font-medium">Creado</th>
+                <th className="px-4 py-2 text-left font-medium">Mercado Libre</th>
                 <th className="px-4 py-2 text-left font-medium">Acciones</th>
               </tr>
             </thead>
@@ -395,6 +648,25 @@ export function UserManagementClient({ initialUsers, currentUserId }: UserManage
                   <td className="px-4 py-2">{user.email}</td>
                   <td className="px-4 py-2 uppercase">{user.role}</td>
                   <td className="px-4 py-2 text-slate-400">{formatDateTime(user.createdAt)}</td>
+                  <td className="px-4 py-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {user.hasMercadoLibreLinked ? (
+                        <span className="rounded-full border border-emerald-400/50 bg-emerald-500/15 px-2 py-1 text-[11px] font-semibold text-emerald-100">
+                          Vinculado
+                        </span>
+                      ) : (
+                        <span className="rounded-full border border-amber-400/50 bg-amber-500/15 px-2 py-1 text-[11px] font-semibold text-amber-100">
+                          Sin vincular
+                        </span>
+                      )}
+                      <a
+                        href={buildMlAuthLink(user.id)}
+                        className="rounded-md border border-sky-400/60 px-2 py-1 text-[11px] font-semibold text-sky-200 transition hover:bg-sky-500/10"
+                      >
+                        {user.hasMercadoLibreLinked ? "Re-vincular" : "Vincular"}
+                      </a>
+                    </div>
+                  </td>
                   <td className="px-4 py-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <button
@@ -420,7 +692,7 @@ export function UserManagementClient({ initialUsers, currentUserId }: UserManage
               ))}
               {usersSorted.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-4 py-6 text-center text-slate-400">
+                  <td colSpan={6} className="px-4 py-6 text-center text-slate-400">
                     Aun no hay usuarios registrados.
                   </td>
                 </tr>

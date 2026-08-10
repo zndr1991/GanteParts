@@ -4,6 +4,7 @@ node_modules/
 # Build de Next.js
 .next/
 out/
+*.tsbuildinfo
 
 # Logs
 npm-debug.log*

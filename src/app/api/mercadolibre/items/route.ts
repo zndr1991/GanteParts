@@ -5,7 +5,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { activateItem, pauseItem } from "@/lib/mercadolibre";
+import { activateItem, getMercadoLibreAccount, pauseItem } from "@/lib/mercadolibre";
 
 const actionSchema = z.object({
   ids: z.array(z.string().min(1)).min(1),
@@ -22,6 +22,16 @@ export async function POST(req: Request) {
   if (!session?.user?.id) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   if (!canManageMercadoLibre(session.user.role)) {
     return NextResponse.json({ error: "No autorizado" }, { status: 403 });
+  }
+
+  const linkedAccount = await getMercadoLibreAccount(session.user.id);
+  if (!linkedAccount) {
+    return NextResponse.json(
+      {
+        error: "Tu usuario no tiene cuenta de Mercado Libre vinculada. Vinculala desde Gestion de usuarios."
+      },
+      { status: 409 }
+    );
   }
 
   const body = await req.json().catch(() => null);
