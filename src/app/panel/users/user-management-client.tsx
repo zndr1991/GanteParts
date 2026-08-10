@@ -279,9 +279,12 @@ export function UserManagementClient({ initialUsers, currentUserId }: UserManage
           </button>
           <Link
             href="/panel"
-            className="rounded-md border border-slate-600 px-4 py-2 text-sm text-slate-200 transition hover:border-violet-400"
+            className="inline-flex items-center gap-2 rounded-md border border-slate-600 bg-slate-900/70 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-slate-400 hover:bg-slate-800/80 active:border-amber-400/70 active:bg-amber-500/15 active:text-amber-100"
           >
-            Volver al panel
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+              <path d="M4 4h7v7H4zM13 4h7v5h-7zM13 11h7v9h-7zM4 13h7v7H4z" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <span>Volver al panel</span>
           </Link>
           {error && <p className="text-sm text-amber-400">{error}</p>}
           {success && <p className="text-sm text-emerald-300">{success}</p>}

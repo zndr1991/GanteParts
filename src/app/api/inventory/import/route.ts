@@ -94,6 +94,10 @@ const canImportInventory = (role?: string | null) => {
   return normalized === "admin";
 };
 
+const GLOBAL_DUPLICATE_SKU_ERROR = "SKU interno ya existe en la base de datos";
+
+const normalizeSkuInternal = (value: unknown) => String(value ?? "").trim().toUpperCase();
+
 export async function POST(req: Request) {
   const session = await auth();
   const userId = session?.user?.id;
@@ -117,20 +121,28 @@ export async function POST(req: Request) {
 
   const rows = XLSX.utils.sheet_to_json<Record<string, any>>(workbook.Sheets[firstSheet], { defval: "" });
   const errors: string[] = [];
-  const data: Prisma.InventoryItemCreateManyInput[] = [];
+  const parsedRows: Array<{ rowNumber: number; sku: string; data: Prisma.InventoryItemCreateManyInput }> = [];
+  const seenSkusInFile = new Set<string>();
 
   rows.forEach((row, idx) => {
+    const rowNumber = idx + 2;
     const normalized: Record<string, any> = {};
     Object.entries(row).forEach(([key, value]) => {
       const mapped = headerMap[normalizeHeader(key)];
       if (mapped) normalized[mapped] = value;
     });
 
-    const sku = (normalized.skuInternal ?? "").toString().trim();
+    const sku = normalizeSkuInternal(normalized.skuInternal);
     if (!sku) {
-      errors.push(`Fila ${idx + 2}: SKU requerido`);
+      errors.push(`Fila ${rowNumber}: SKU requerido`);
       return;
     }
+
+    if (seenSkusInFile.has(sku)) {
+      errors.push(`Fila ${rowNumber}: SKU duplicado en el archivo (${sku})`);
+      return;
+    }
+    seenSkusInFile.add(sku);
 
     const priceRaw = normalized.price;
     const stockRaw = normalized.stock;
@@ -167,7 +179,10 @@ export async function POST(req: Request) {
       }
     });
 
-    data.push({
+    parsedRows.push({
+      rowNumber,
+      sku,
+      data: {
       skuInternal: sku,
       title: normalized.title ? String(normalized.title) : null,
       price: price !== null ? new Prisma.Decimal(price) : null,
@@ -177,14 +192,39 @@ export async function POST(req: Request) {
       ownerId: userId,
       status: statusValue,
       extraData: Object.keys(extras).length ? extras : undefined
+      }
     });
   });
 
-  if (data.length === 0) {
+  if (parsedRows.length === 0) {
     return NextResponse.json({ error: "Sin filas validas", errors }, { status: 400 });
   }
 
-  const result = await prisma.inventoryItem.createMany({ data, skipDuplicates: true });
+  const uniqueSkus = Array.from(new Set(parsedRows.map((entry) => entry.sku)));
+  const existingRows = uniqueSkus.length
+    ? await prisma.$queryRaw<Array<{ sku: string }>>(Prisma.sql`
+      SELECT UPPER(TRIM(COALESCE("skuInternal", ''))) AS sku
+      FROM "InventoryItem"
+      WHERE UPPER(TRIM(COALESCE("skuInternal", ''))) IN (${Prisma.join(uniqueSkus)})
+    `)
+    : [];
+
+  const existingSkuSet = new Set(existingRows.map((entry) => normalizeSkuInternal(entry.sku)));
+  const insertableData: Prisma.InventoryItemCreateManyInput[] = [];
+
+  parsedRows.forEach((entry) => {
+    if (existingSkuSet.has(entry.sku)) {
+      errors.push(`Fila ${entry.rowNumber}: ${GLOBAL_DUPLICATE_SKU_ERROR} (${entry.sku})`);
+      return;
+    }
+    insertableData.push(entry.data);
+  });
+
+  if (!insertableData.length) {
+    return NextResponse.json({ error: GLOBAL_DUPLICATE_SKU_ERROR, inserted: 0, errors: errors.slice(0, 25) }, { status: 409 });
+  }
+
+  const result = await prisma.inventoryItem.createMany({ data: insertableData, skipDuplicates: true });
 
   await prisma.auditLog.create({
     data: {
@@ -193,6 +233,7 @@ export async function POST(req: Request) {
       metadata: {
         totalRows: rows.length,
         inserted: result.count,
+        skipped: parsedRows.length - result.count,
         errors: errors.length
       }
     }

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type EntryType = "income" | "expense";
@@ -239,7 +240,45 @@ const makeInitialDebtForm = () => ({
   date: todayDateInput()
 });
 
+const INTERNAL_MENU_LINK_BASE_CLASS =
+  "inline-flex items-center justify-center gap-2 rounded-md border px-3 py-2 text-sm font-semibold transition active:border-amber-400/70 active:bg-amber-500/15 active:text-amber-100";
+const INTERNAL_MENU_LINK_IDLE_CLASS =
+  "border-slate-600 bg-slate-900/70 text-slate-100 hover:border-slate-400 hover:bg-slate-800/80";
+const INTERNAL_MENU_LINK_ACTIVE_CLASS = "border-amber-400/70 bg-amber-500/15 text-amber-100";
+
+const getInternalMenuLinkClass = (isActive: boolean) =>
+  `${INTERNAL_MENU_LINK_BASE_CLASS} ${isActive ? INTERNAL_MENU_LINK_ACTIVE_CLASS : INTERNAL_MENU_LINK_IDLE_CLASS}`;
+
+type InternalMenuIconName = "panel" | "inventory" | "logout";
+
+function InternalMenuIcon({ icon }: { icon: InternalMenuIconName }) {
+  switch (icon) {
+    case "panel":
+      return (
+        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+          <path d="M4 4h7v7H4zM13 4h7v5h-7zM13 11h7v9h-7zM4 13h7v7H4z" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case "inventory":
+      return (
+        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+          <path d="M4 7h16M4 12h16M4 17h10" strokeLinecap="round" />
+        </svg>
+      );
+    case "logout":
+      return (
+        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+          <path d="M9 5H5v14h4" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M15 8l4 4-4 4M8 12h11" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    default:
+      return null;
+  }
+}
+
 export function FinanceClient({ userRole }: FinanceClientProps) {
+  const pathname = usePathname();
   const [activeTab, setActiveTab] = useState<"cashflow" | "debts">("cashflow");
   const [weekAnchor, setWeekAnchor] = useState(todayDateInput());
   const [data, setData] = useState<FinanceData | null>(null);
@@ -257,6 +296,8 @@ export function FinanceClient({ userRole }: FinanceClientProps) {
   const normalizedRole = (userRole ?? "").toLowerCase();
   const roleCanManage = normalizedRole === "admin" || normalizedRole === "supervisor" || normalizedRole === "operator";
   const canManage = data?.canManage ?? roleCanManage;
+  const isPanelMenuActive = pathname === "/panel";
+  const isInventoryMenuActive = pathname.startsWith("/inventory");
 
   const fetchFinanceData = useCallback(async (anchor: string, options?: { silent?: boolean }) => {
     if (!options?.silent) {
@@ -754,21 +795,24 @@ export function FinanceClient({ userRole }: FinanceClientProps) {
             <div className="flex flex-wrap gap-2">
               <Link
                 href="/panel"
-                className="rounded-md border border-emerald-400/50 bg-emerald-500/10 px-3 py-2 text-sm font-semibold text-emerald-100 hover:bg-emerald-500/20"
+                className={getInternalMenuLinkClass(isPanelMenuActive)}
               >
-                Volver al menu
+                <InternalMenuIcon icon="panel" />
+                <span>Volver al menu</span>
               </Link>
               <Link
                 href="/inventory"
-                className="rounded-md border border-amber-400/50 bg-amber-500/10 px-3 py-2 text-sm font-semibold text-amber-100 hover:bg-amber-500/20"
+                className={getInternalMenuLinkClass(isInventoryMenuActive)}
               >
-                Ir a inventario
+                <InternalMenuIcon icon="inventory" />
+                <span>Ir a inventario</span>
               </Link>
               <a
                 href="/api/auth/signout"
-                className="rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:border-amber-400"
+                className={getInternalMenuLinkClass(false)}
               >
-                Cerrar sesion
+                <InternalMenuIcon icon="logout" />
+                <span>Cerrar sesion</span>
               </a>
             </div>
           </div>

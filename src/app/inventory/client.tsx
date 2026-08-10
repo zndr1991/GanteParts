@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MAX_ITEM_PHOTOS } from "@/lib/inventory-serialization";
 
@@ -818,7 +819,53 @@ const getStatusBadgeClass = (status?: string | null) => {
   }
 };
 
+const INTERNAL_MENU_LINK_BASE_CLASS =
+  "inline-flex items-center justify-center gap-2 rounded-md border px-3 py-2 text-center text-sm font-semibold transition active:border-amber-400/70 active:bg-amber-500/15 active:text-amber-100";
+const INTERNAL_MENU_LINK_IDLE_CLASS =
+  "border-slate-600 bg-slate-900/70 text-slate-100 hover:border-slate-400 hover:bg-slate-800/80";
+const INTERNAL_MENU_LINK_ACTIVE_CLASS = "border-amber-400/70 bg-amber-500/15 text-amber-100";
+
+const getInternalMenuLinkClass = (isActive: boolean) =>
+  `${INTERNAL_MENU_LINK_BASE_CLASS} ${isActive ? INTERNAL_MENU_LINK_ACTIVE_CLASS : INTERNAL_MENU_LINK_IDLE_CLASS}`;
+
+type InternalMenuIconName = "panel" | "finanzas" | "manual" | "logout";
+
+function InternalMenuIcon({ icon }: { icon: InternalMenuIconName }) {
+  switch (icon) {
+    case "panel":
+      return (
+        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+          <path d="M4 4h7v7H4zM13 4h7v5h-7zM13 11h7v9h-7zM4 13h7v7H4z" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case "finanzas":
+      return (
+        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+          <path d="M4 7h16M6 12h12M8 17h8" strokeLinecap="round" />
+          <rect x="3" y="4" width="18" height="16" rx="3" />
+        </svg>
+      );
+    case "manual":
+      return (
+        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+          <path d="M12 6v12M6 12h12" strokeLinecap="round" />
+          <rect x="4" y="4" width="16" height="16" rx="3" />
+        </svg>
+      );
+    case "logout":
+      return (
+        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+          <path d="M9 5H5v14h4" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M15 8l4 4-4 4M8 12h11" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    default:
+      return null;
+  }
+}
+
 export function InventoryClient({ initialPage, userRole, mode = "full", initialStatusFilter = null }: InventoryClientProps) {
+  const pathname = usePathname();
   const isManualOnly = mode === "manual-only";
   const normalizedInitialStatusFilter = initialStatusFilter?.trim().toUpperCase() || null;
   const [manualTab, setManualTab] = useState<"capture" | "nomenclatures">("capture");
@@ -1002,6 +1049,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   const canCreateManual = canEditInventory || normalizedRole === "operator" || normalizedRole === "uploader";
   const canImportInventory = canEditInventory;
   const canManageMercadoLibre = canEditInventory;
+  const isPanelMenuActive = pathname === "/panel";
+  const isFinanzasMenuActive = pathname.startsWith("/finanzas");
+  const isManualMenuActive = pathname.startsWith("/inventory/manual");
   const thumbnailsActive = THUMBNAILS_ENABLED;
   const canAutoEnableHybridLocal = false;
   const useServerPagination = !isManualOnly;
@@ -5080,31 +5130,35 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
               <div className="flex flex-col gap-2 sm:flex-row">
                 <Link
                   href="/panel"
-                  className="rounded-md border border-emerald-400/50 bg-emerald-500/10 px-3 py-2 text-center text-sm font-semibold text-emerald-100 hover:bg-emerald-500/20"
+                  className={getInternalMenuLinkClass(isPanelMenuActive)}
                 >
-                  Volver al menú
+                  <InternalMenuIcon icon="panel" />
+                  <span>Volver al menú</span>
                 </Link>
                 {!isManualOnly && (
                   <Link
                     href="/finanzas"
-                    className="rounded-md border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-center text-sm font-semibold text-amber-200 hover:bg-amber-500/20"
+                    className={getInternalMenuLinkClass(isFinanzasMenuActive)}
                   >
-                    Control de gastos
+                    <InternalMenuIcon icon="finanzas" />
+                    <span>Control de gastos</span>
                   </Link>
                 )}
                 {!isManualOnly && canCreateManual && (
                   <Link
                     href="/inventory/manual"
-                    className="rounded-md border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-center text-sm font-semibold text-amber-200 hover:bg-amber-500/20"
+                    className={getInternalMenuLinkClass(isManualMenuActive)}
                   >
-                    Captura manual
+                    <InternalMenuIcon icon="manual" />
+                    <span>Captura manual</span>
                   </Link>
                 )}
                 <a
                   href="/api/auth/signout"
-                  className="rounded-md border border-slate-700 px-3 py-2 text-center text-sm text-slate-200 hover:border-amber-400"
+                  className={getInternalMenuLinkClass(false)}
                 >
-                  Cerrar sesion
+                  <InternalMenuIcon icon="logout" />
+                  <span>Cerrar sesion</span>
                 </a>
               </div>
             </div>

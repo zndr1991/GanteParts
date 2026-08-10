@@ -24,6 +24,21 @@ const canCreateInventory = (role?: string | null) => {
   return normalized === "admin" || normalized === "operator" || normalized === "uploader";
 };
 
+const GLOBAL_DUPLICATE_SKU_ERROR = "SKU interno ya existe en la base de datos";
+
+const normalizeSkuInternal = (value: string) => value.trim().toUpperCase();
+
+const findInventoryItemBySkuGlobal = async (normalizedSku: string, excludeId?: string) => {
+  const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT "id"
+    FROM "InventoryItem"
+    WHERE UPPER(TRIM(COALESCE("skuInternal", ''))) = ${normalizedSku}
+    ${excludeId ? Prisma.sql`AND "id" <> ${excludeId}` : Prisma.empty}
+    LIMIT 1
+  `);
+  return rows[0] ?? null;
+};
+
 const revalidateInventorySnapshotCache = () => {
   revalidateTag("inventory-initial");
 };
@@ -1079,11 +1094,20 @@ export async function POST(req: Request) {
   }
 
   const data = parsed.data;
+  const normalizedSku = normalizeSkuInternal(data.skuInternal);
+  if (!normalizedSku.length) {
+    return NextResponse.json({ error: "SKU invalido" }, { status: 400 });
+  }
+
+  const duplicateSku = await findInventoryItemBySkuGlobal(normalizedSku);
+  if (duplicateSku) {
+    return NextResponse.json({ error: GLOBAL_DUPLICATE_SKU_ERROR }, { status: 409 });
+  }
 
   try {
     const item = await prisma.inventoryItem.create({
       data: {
-        skuInternal: data.skuInternal,
+        skuInternal: normalizedSku,
         title: data.title,
         price: data.price !== undefined ? new Prisma.Decimal(data.price) : null,
         stock: data.stock ?? 0,
@@ -1102,7 +1126,7 @@ export async function POST(req: Request) {
           action: "inventory:create",
           userId: session.user.id,
           itemId: item.id,
-          metadata: { skuInternal: data.skuInternal }
+          metadata: { skuInternal: normalizedSku }
         }
       });
     } catch (logErr) {
@@ -1116,7 +1140,7 @@ export async function POST(req: Request) {
     return NextResponse.json(serializeInventoryItem(item, { includePhotos: true }), { status: 201 });
   } catch (err: any) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-      return NextResponse.json({ error: "SKU interno duplicado para este usuario" }, { status: 409 });
+      return NextResponse.json({ error: GLOBAL_DUPLICATE_SKU_ERROR }, { status: 409 });
     }
 
     console.error("Error al crear item de inventario", err);
@@ -1393,10 +1417,16 @@ export async function PATCH(req: Request) {
   };
 
   if (skuInternal !== undefined) {
-    const normalizedSku = skuInternal.trim().toUpperCase();
+    const normalizedSku = normalizeSkuInternal(skuInternal);
     if (!normalizedSku) {
       return NextResponse.json({ error: "SKU invalido" }, { status: 400 });
     }
+
+    const duplicateSku = await findInventoryItemBySkuGlobal(normalizedSku, id);
+    if (duplicateSku) {
+      return NextResponse.json({ error: GLOBAL_DUPLICATE_SKU_ERROR }, { status: 409 });
+    }
+
     updateData.skuInternal = normalizedSku;
   }
 
@@ -1416,7 +1446,7 @@ export async function PATCH(req: Request) {
     });
   } catch (err: any) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-      return NextResponse.json({ error: "SKU interno duplicado para este usuario" }, { status: 409 });
+      return NextResponse.json({ error: GLOBAL_DUPLICATE_SKU_ERROR }, { status: 409 });
     }
     throw err;
   }

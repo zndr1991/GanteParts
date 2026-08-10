@@ -8,9 +8,7 @@ import { PanelRoutePrefetch } from "@/components/panel-route-prefetch";
 type Shortcut = {
   href: Route;
   title: string;
-  border: string;
   icon: "inventory" | "new" | "loan" | "public" | "users";
-  textColor: string;
   roles?: string[];
 };
 
@@ -18,37 +16,27 @@ const shortcuts: Shortcut[] = [
   {
     href: "/inventory",
     title: "INVENTARIO",
-    border: "border-emerald-400/40",
-    icon: "inventory",
-    textColor: "text-emerald-100"
+    icon: "inventory"
   },
   {
     href: "/inventory/manual",
     title: "NUEVO REGISTRO",
-    border: "border-amber-400/40",
-    icon: "new",
-    textColor: "text-amber-100"
+    icon: "new"
   },
   {
     href: "/inventory/prestadas",
     title: "PRESTADO",
-    border: "border-sky-400/40",
-    icon: "loan",
-    textColor: "text-sky-100"
+    icon: "loan"
   },
   {
     href: "/public-inventory",
     title: "INVENTARIO PUBLICO",
-    border: "border-cyan-400/40",
-    icon: "public",
-    textColor: "text-cyan-100"
+    icon: "public"
   },
   {
     href: "/panel/users",
     title: "GESTION DE USUARIOS",
-    border: "border-violet-400/40",
     icon: "users",
-    textColor: "text-violet-100",
     roles: ["admin"]
   }
 ];
@@ -122,9 +110,13 @@ export default async function PanelPage() {
             </div>
             <a
               href="/api/auth/signout"
-              className="text-sm font-medium text-slate-300 underline decoration-slate-600 underline-offset-4 hover:text-rose-300 hover:decoration-rose-400"
+              className="inline-flex items-center gap-2 rounded-md border border-slate-600 bg-slate-900/70 px-3 py-2 text-sm font-semibold text-slate-100 transition hover:border-slate-400 hover:bg-slate-800/80 active:border-amber-400/70 active:bg-amber-500/15 active:text-amber-100"
             >
-              Cerrar sesión
+              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                <path d="M9 5H5v14h4" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M15 8l4 4-4 4M8 12h11" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span>Cerrar sesión</span>
             </a>
           </div>
 
@@ -133,15 +125,15 @@ export default async function PanelPage() {
               <Link
                 key={shortcut.href}
                 href={shortcut.href}
-                className={`group flex w-full items-center justify-between rounded-2xl border ${shortcut.border} bg-slate-900/70 px-4 py-3 transition hover:bg-slate-900`}
+                className="group flex w-full items-center justify-between rounded-2xl border border-slate-600 bg-slate-900/70 px-4 py-3 transition hover:border-slate-400 hover:bg-slate-900 active:border-amber-400/70 active:bg-amber-500/15"
               >
                 <span className="flex items-center gap-3">
-                  <span className={`rounded-xl border border-white/10 bg-slate-950/80 p-2 ${shortcut.textColor}`}>
+                  <span className="rounded-xl border border-slate-700 bg-slate-950/80 p-2 text-slate-200 transition group-hover:text-white group-active:text-amber-100">
                     <ShortcutIcon icon={shortcut.icon} />
                   </span>
-                  <span className={`text-sm font-semibold tracking-[0.08em] ${shortcut.textColor}`}>{shortcut.title}</span>
+                  <span className="text-sm font-semibold tracking-[0.08em] text-slate-100 transition group-hover:text-white group-active:text-amber-100">{shortcut.title}</span>
                 </span>
-                <span className="text-[11px] uppercase tracking-[0.25em] text-slate-400 group-hover:text-slate-200">Entrar</span>
+                <span className="text-[11px] uppercase tracking-[0.25em] text-slate-400 transition group-hover:text-slate-200 group-active:text-amber-200">Entrar</span>
               </Link>
             ))}
           </div>
@@ -152,7 +144,7 @@ export default async function PanelPage() {
             <Link
               key={shortcut.href}
               href={shortcut.href}
-              className={`group rounded-2xl border ${shortcut.border} p-6 transition hover:border-white/40`}
+              className="group rounded-2xl border border-slate-700 p-6 transition hover:border-white/40"
             >
               <div className="flex flex-col gap-3">
                 <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Acceso rápido</p>
