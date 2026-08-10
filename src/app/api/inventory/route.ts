@@ -11,7 +11,7 @@ import { z } from "zod";
 
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 5000;
-const STATUS_TOTALS_CACHE_TTL_MS = 5 * 60 * 1000;
+const STATUS_TOTALS_CACHE_TTL_MS = 12 * 1000;
 const MAX_SEARCH_TOKENS = 4;
 
 const canEditInventory = (role?: string | null) => {
@@ -428,7 +428,7 @@ const interactiveSearchInFlight = new Map<string, Promise<InteractiveSearchSnaps
 
 const statusTotalsCacheKey = (ownerId: string | null) => ownerId ?? "__ALL__";
 const interactiveSearchCacheKey = (ownerId: string | null) => ownerId ?? "__ALL__";
-const INTERACTIVE_SEARCH_CACHE_TTL_MS = 90 * 1000;
+const INTERACTIVE_SEARCH_CACHE_TTL_MS = 8 * 1000;
 
 const invalidateStatusTotalsCache = () => {
   statusTotalsCache.clear();
@@ -840,7 +840,10 @@ export async function GET(req: Request) {
     const codeSearchMode = Boolean(searchFilter && isLikelyCodeSearch(searchFilter, normalizedSearchToken));
 
     if (!includeMeta) {
-      let filtered = await getInteractiveSearchSnapshot(ownerId);
+      const shouldBypassInteractiveSnapshotCache = Boolean(statusFilter) || Boolean(searchFilter);
+      let filtered = shouldBypassInteractiveSnapshotCache
+        ? await loadInteractiveSearchSnapshot(ownerId)
+        : await getInteractiveSearchSnapshot(ownerId);
 
       if (searchFilter) {
         if (codeSearchMode) {

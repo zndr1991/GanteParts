@@ -259,7 +259,9 @@ const WORKER_SEARCH_MIN_ITEMS = 250;
 const INVENTORY_PAGE_BLOCK_SIZE_DEFAULT = 100;
 const INVENTORY_PAGE_BLOCK_SIZE_ALL_REQUEST = 5000;
 const MAX_INVENTORY_SEARCH_TOKENS = 4;
-const INVENTORY_PAGE_CACHE_TTL_MS = 25_000;
+const INVENTORY_PAGE_CACHE_TTL_MS = 4_000;
+const INVENTORY_REALTIME_REFRESH_INTERVAL_MS = 8_000;
+const LOCAL_ESTATUS_OVERRIDE_TTL_MS = 45_000;
 const INVENTORY_LOADING_INDICATOR_DELAY_MS = 180;
 const MANUAL_SKU_NUMBER_PADDING = 5;
 const HYBRID_LOCAL_AUTOLOAD_DELAY_MS = 350;
@@ -1354,6 +1356,37 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   }, [fetchNotifications, isManualOnly, notificationsPage, notificationsSearch]);
 
   useEffect(() => {
+    if (isManualOnly || !useServerPagination) {
+      return undefined;
+    }
+
+    const interval = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+        return;
+      }
+      if (loadingPage || inventoryRefreshing) {
+        return;
+      }
+      if (updatingIds.length > 0 || mlAction || mlSingleActivatingId) {
+        return;
+      }
+
+      inventoryPageCacheRef.current.clear();
+      setInventoryReloadSeq((current) => current + 1);
+    }, INVENTORY_REALTIME_REFRESH_INTERVAL_MS);
+
+    return () => clearInterval(interval);
+  }, [
+    inventoryRefreshing,
+    isManualOnly,
+    loadingPage,
+    mlAction,
+    mlSingleActivatingId,
+    updatingIds.length,
+    useServerPagination
+  ]);
+
+  useEffect(() => {
     if (isManualOnly) return;
     const controller = new AbortController();
     const timeout = setTimeout(() => {
@@ -1395,11 +1428,18 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     return incoming.map((item) => {
       const local = localEstatusInternoRef.current.get(item.id);
       if (!local) return item;
-      if (now - local.updatedAt > 10 * 60 * 1000) {
+      if (now - local.updatedAt > LOCAL_ESTATUS_OVERRIDE_TTL_MS) {
         localEstatusInternoRef.current.delete(item.id);
         return item;
       }
       const currentInternal = (item.extraData?.estatus_interno ?? "").toString().trim().toUpperCase();
+
+      // Si Mercado Libre ya pausó/inactivó, no mantener un override local viejo en "ML".
+      if (currentInternal === "PAUSADO POR MERCADO LIBRE" && local.value === "ML") {
+        localEstatusInternoRef.current.delete(item.id);
+        return item;
+      }
+
       if (currentInternal === local.value) {
         localEstatusInternoRef.current.delete(item.id);
         return item;
@@ -2925,6 +2965,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     overridePrestadoVendidoA?: string | null,
     overridePrice?: number | null
   ) => {
+    let updateSucceeded = false;
     const normalized = value.trim().toUpperCase();
     const current = items.find((it) => it.id === id);
     const hasMlItem = Boolean(current?.mlItemId);
@@ -3034,11 +3075,15 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
       } else if (financeResult.status === "registered") {
         setMessage(`Estatus interno guardado${financeMessage}`);
       }
+      updateSucceeded = true;
     } catch (err: any) {
       setItems(prevItems);
       setMessage(err.message || "No se pudo actualizar");
       localEstatusInternoRef.current.delete(id);
     } finally {
+      if (updateSucceeded) {
+        localEstatusInternoRef.current.delete(id);
+      }
       setUpdatingIds((prev) => prev.filter((x) => x !== id));
     }
   }, [items, registerSoldItemInFinance]);
