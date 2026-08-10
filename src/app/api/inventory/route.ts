@@ -2,8 +2,8 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { activateItem, pauseItem } from "@/lib/mercadolibre";
-import { MAX_ITEM_PHOTOS, serializeInventoryItem } from "@/lib/inventory-serialization";
+import { activateItem, pauseItem, syncItemPhotosToMercadoLibre } from "@/lib/mercadolibre";
+import { MAX_ITEM_PHOTOS, sanitizePhotosArray, serializeInventoryItem } from "@/lib/inventory-serialization";
 import { Prisma } from "@prisma/client";
 import { revalidateTag } from "next/cache";
 import { NextResponse } from "next/server";
@@ -1390,7 +1390,58 @@ export async function PATCH(req: Request) {
     }
   }
 
-  let mlSyncError: string | null = null;
+  const mlSyncErrors: string[] = [];
+  const mlSyncWarnings: string[] = [];
+  let mlPhotosSyncMetadata: Record<string, unknown> | null = null;
+
+  if (photos !== undefined) {
+    if (!nextMlItemId) {
+      mlSyncWarnings.push("Fotos guardadas en la app. Sin codigo de Mercado Libre no se sincronizan hacia ML.");
+      mlPhotosSyncMetadata = {
+        attempted: false,
+        reason: "ml_item_id_missing"
+      };
+    } else {
+      const localPhotosForSync = sanitizePhotosArray(nextExtra.photos, MAX_ITEM_PHOTOS);
+      try {
+        const photoSync = await syncItemPhotosToMercadoLibre({
+          userId: existing.ownerId,
+          itemId: nextMlItemId,
+          localPhotos: localPhotosForSync,
+          limit: MAX_ITEM_PHOTOS
+        });
+
+        if (photoSync.synced) {
+          nextExtra.photos = photoSync.photos;
+        }
+
+        if (photoSync.skipped && photoSync.reason) {
+          mlSyncWarnings.push(photoSync.reason);
+        }
+
+        mlPhotosSyncMetadata = {
+          attempted: true,
+          synced: photoSync.synced,
+          skipped: photoSync.skipped,
+          reason: photoSync.reason,
+          uploadedFromDataUrl: photoSync.uploadedFromDataUrl,
+          reusedHttpSources: photoSync.reusedHttpSources,
+          finalPhotos: photoSync.photos.length
+        };
+      } catch (err: any) {
+        const message = err?.message || "No se pudo sincronizar fotos con Mercado Libre";
+        mlSyncErrors.push(`Fotos ML: ${message}`);
+        mlPhotosSyncMetadata = {
+          attempted: true,
+          synced: false,
+          skipped: false,
+          reason: "error",
+          error: message
+        };
+      }
+    }
+  }
+
   if (
     status &&
     ["active", "paused"].includes(status) &&
@@ -1406,7 +1457,21 @@ export async function PATCH(req: Request) {
         await activateItem(session.user.id, nextMlItemId);
       }
     } catch (err: any) {
-      mlSyncError = err?.message || "No se pudo sincronizar con Mercado Libre";
+      mlSyncErrors.push(`Estatus ML: ${err?.message || "No se pudo sincronizar con Mercado Libre"}`);
+    }
+  }
+
+  if (photos !== undefined) {
+    nextExtra.ml_fotos_sync_at = new Date().toISOString();
+    if (mlSyncErrors.length) {
+      nextExtra.ml_fotos_sync_estado = "error";
+      nextExtra.ml_fotos_sync_mensaje = mlSyncErrors.join(" | ");
+    } else if (mlSyncWarnings.length) {
+      nextExtra.ml_fotos_sync_estado = "warning";
+      nextExtra.ml_fotos_sync_mensaje = mlSyncWarnings.join(" | ");
+    } else {
+      nextExtra.ml_fotos_sync_estado = "ok";
+      delete nextExtra.ml_fotos_sync_mensaje;
     }
   }
 
@@ -1480,7 +1545,10 @@ export async function PATCH(req: Request) {
         stock: stock ?? null,
         price: price ?? null,
         precioCompra: precioCompra ?? null,
-        mlItemId: mlItemId ?? null
+        mlItemId: mlItemId ?? null,
+        mlPhotosSync: mlPhotosSyncMetadata ? (mlPhotosSyncMetadata as Prisma.InputJsonValue) : null,
+        mlSyncWarnings: mlSyncWarnings.length ? mlSyncWarnings : null,
+        mlSyncErrors: mlSyncErrors.length ? mlSyncErrors : null
       }
     }
   });
@@ -1489,8 +1557,12 @@ export async function PATCH(req: Request) {
   invalidateStatusTotalsCache();
   invalidateInteractiveSearchCache();
 
+  const mlSyncError = mlSyncErrors.length ? mlSyncErrors.join(" | ") : null;
+  const mlSyncWarning = mlSyncWarnings.length ? mlSyncWarnings.join(" | ") : null;
+
   return NextResponse.json({
     ...serializeInventoryItem(item),
-    mlSyncError
+    mlSyncError,
+    mlSyncWarning
   });
 }

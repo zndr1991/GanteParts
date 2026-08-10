@@ -2,8 +2,9 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 import { createHmac, timingSafeEqual } from "crypto";
+import { revalidateTag } from "next/cache";
 
-import { fetchItemSnapshotByMlUserId, getMercadoLibreAccountByMlUserId } from "@/lib/mercadolibre";
+import { extractMercadoLibrePictureUrls, fetchItemSnapshotByMlUserId, getMercadoLibreAccountByMlUserId } from "@/lib/mercadolibre";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 
@@ -91,6 +92,21 @@ function mapStatus(status?: string | null) {
   if (!status) return "inactive";
   const normalized = status.toLowerCase();
   return STATUS_MAPPING[normalized] ?? "inactive";
+}
+
+function toExtraDataObject(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {} as Record<string, any>;
+  }
+  return { ...(value as Record<string, any>) };
+}
+
+function areStringArraysEqual(left: string[], right: string[]) {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
 }
 
 export async function POST(req: Request) {
@@ -220,15 +236,60 @@ export async function POST(req: Request) {
   try {
     const snapshot = await fetchItemSnapshotByMlUserId(mlUserId, itemId);
     const nextStatus = mapStatus(snapshot?.status);
-    const updateData: Record<string, unknown> = { status: nextStatus };
-    if (typeof snapshot?.available_quantity === "number") {
-      updateData.stock = snapshot.available_quantity;
-    }
+    const nextStock = typeof snapshot?.available_quantity === "number" ? snapshot.available_quantity : null;
+    const nextPhotos = extractMercadoLibrePictureUrls(snapshot);
 
-    const updateResult = await prisma.inventoryItem.updateMany({
+    const matchedItems = await prisma.inventoryItem.findMany({
       where: { mlItemId: itemId, ownerId: account.userId },
-      data: updateData
+      select: {
+        id: true,
+        status: true,
+        stock: true,
+        extraData: true
+      }
     });
+
+    let updatedCount = 0;
+    let photosUpdatedCount = 0;
+
+    for (const matched of matchedItems) {
+      const nextExtra = toExtraDataObject(matched.extraData);
+      const currentPhotos = Array.isArray(nextExtra.photos)
+        ? nextExtra.photos.map((entry: unknown) => (typeof entry === "string" ? entry.trim() : "")).filter((entry: string) => entry.length)
+        : [];
+
+      const photosChanged = !areStringArraysEqual(currentPhotos, nextPhotos);
+      const statusChanged = matched.status !== nextStatus;
+      const stockChanged = typeof nextStock === "number" && matched.stock !== nextStock;
+
+      if (!photosChanged && !statusChanged && !stockChanged) {
+        continue;
+      }
+
+      if (photosChanged) {
+        if (nextPhotos.length) {
+          nextExtra.photos = nextPhotos;
+        } else {
+          delete nextExtra.photos;
+        }
+        photosUpdatedCount += 1;
+      }
+
+      nextExtra.ml_fotos_sync_at = new Date().toISOString();
+      nextExtra.ml_fotos_sync_estado = "ok";
+      nextExtra.ml_fotos_sync_mensaje = "Sincronizado desde Mercado Libre";
+
+      await prisma.inventoryItem.update({
+        where: { id: matched.id },
+        data: {
+          status: statusChanged ? nextStatus : undefined,
+          stock: stockChanged && typeof nextStock === "number" ? nextStock : undefined,
+          extraData: nextExtra
+        }
+      });
+
+      updatedCount += 1;
+    }
 
     await prisma.auditLog.create({
       data: {
@@ -239,12 +300,19 @@ export async function POST(req: Request) {
           itemId,
           status: snapshot?.status ?? null,
           mappedStatus: nextStatus,
-          updated: updateResult.count
+          stock: nextStock,
+          photosDetected: nextPhotos.length,
+          photosUpdated: photosUpdatedCount,
+          updated: updatedCount
         }
       }
     });
 
-    return NextResponse.json({ ok: true, updated: updateResult.count });
+    if (updatedCount > 0) {
+      revalidateTag("inventory-initial");
+    }
+
+    return NextResponse.json({ ok: true, updated: updatedCount, photosUpdated: photosUpdatedCount });
   } catch (error: any) {
     await prisma.auditLog.create({
       data: {

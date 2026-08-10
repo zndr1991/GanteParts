@@ -2432,14 +2432,21 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
       if (!res.ok) {
         throw new Error(data.error || "No se pudieron actualizar las fotos");
       }
+      const nextPhotoCount = typeof data?.photoCount === "number" ? data.photoCount : photosToSave.length;
       setItems((curr) =>
         curr.map((item) =>
-          item.id === photoModal.id ? { ...item, photoCount: photosToSave.length } : item
+          item.id === photoModal.id ? { ...item, photoCount: nextPhotoCount } : item
         )
       );
       setThumbnailVersionById((prev) => ({ ...prev, [photoModal.id]: (prev[photoModal.id] ?? 0) + 1 }));
       closePhotoModal();
-      setMessage("Fotos actualizadas");
+      if (data?.mlSyncError) {
+        setMessage(`Fotos guardadas en la app, pero ML falló: ${data.mlSyncError}`);
+      } else if (data?.mlSyncWarning) {
+        setMessage(`Fotos actualizadas. Aviso ML: ${data.mlSyncWarning}`);
+      } else {
+        setMessage("Fotos actualizadas");
+      }
     } catch (err: any) {
       setPhotoModalError(err.message || "No se pudieron actualizar las fotos");
     } finally {
