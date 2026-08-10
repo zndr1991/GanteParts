@@ -477,6 +477,7 @@ const fileToDataUrl = async (file: File) => {
 
 const estatusInternoOptions = [
   "ML",
+  "PAUSADO POR MERCADO LIBRE",
   "PRESTADO",
   "VENDIDO",
   "FOTOS",
@@ -5198,6 +5199,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
 
     const preferredOrder = [
       "ML",
+      "PAUSADO POR MERCADO LIBRE",
       "VENDIDO",
       "SIN SUBIR",
       "PRESTADO",

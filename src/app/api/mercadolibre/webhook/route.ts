@@ -18,6 +18,9 @@ const STATUS_MAPPING: Record<string, string> = {
   payment_required: "inactive"
 };
 
+const INTERNAL_STATUS_PAUSED_BY_ML = "PAUSADO POR MERCADO LIBRE";
+const INTERNAL_STATUS_ACTIVE_ML = "ML";
+
 const SUPPORTED_TOPICS = new Set(["items"]);
 
 function verifySignature(params: { signatureHeader: string; secret: string; rawBody: string }) {
@@ -92,6 +95,33 @@ function mapStatus(status?: string | null) {
   if (!status) return "inactive";
   const normalized = status.toLowerCase();
   return STATUS_MAPPING[normalized] ?? "inactive";
+}
+
+function normalizeInternalStatus(value: unknown) {
+  const raw = (value ?? "").toString().trim().toUpperCase();
+  return raw.length ? raw : "SIN ESTATUS";
+}
+
+function resolveInternalStatusFromMercadoLibre(params: {
+  nextStatus: string;
+  currentInternalStatus: string;
+}) {
+  const { nextStatus, currentInternalStatus } = params;
+
+  if (nextStatus === "active") {
+    if (currentInternalStatus === INTERNAL_STATUS_PAUSED_BY_ML) {
+      return INTERNAL_STATUS_ACTIVE_ML;
+    }
+    return null;
+  }
+
+  if (nextStatus === "paused" || nextStatus === "inactive") {
+    if (currentInternalStatus !== INTERNAL_STATUS_PAUSED_BY_ML) {
+      return INTERNAL_STATUS_PAUSED_BY_ML;
+    }
+  }
+
+  return null;
 }
 
 function toExtraDataObject(value: unknown) {
@@ -251,6 +281,7 @@ export async function POST(req: Request) {
 
     let updatedCount = 0;
     let photosUpdatedCount = 0;
+    let internalStatusUpdatedCount = 0;
 
     for (const matched of matchedItems) {
       const nextExtra = toExtraDataObject(matched.extraData);
@@ -261,8 +292,14 @@ export async function POST(req: Request) {
       const photosChanged = !areStringArraysEqual(currentPhotos, nextPhotos);
       const statusChanged = matched.status !== nextStatus;
       const stockChanged = typeof nextStock === "number" && matched.stock !== nextStock;
+      const currentInternalStatus = normalizeInternalStatus(nextExtra.estatus_interno);
+      const nextInternalStatus = resolveInternalStatusFromMercadoLibre({
+        nextStatus,
+        currentInternalStatus
+      });
+      const internalStatusChanged = typeof nextInternalStatus === "string";
 
-      if (!photosChanged && !statusChanged && !stockChanged) {
+      if (!photosChanged && !statusChanged && !stockChanged && !internalStatusChanged) {
         continue;
       }
 
@@ -273,6 +310,11 @@ export async function POST(req: Request) {
           delete nextExtra.photos;
         }
         photosUpdatedCount += 1;
+      }
+
+      if (internalStatusChanged) {
+        nextExtra.estatus_interno = nextInternalStatus;
+        internalStatusUpdatedCount += 1;
       }
 
       nextExtra.ml_fotos_sync_at = new Date().toISOString();
@@ -303,6 +345,7 @@ export async function POST(req: Request) {
           stock: nextStock,
           photosDetected: nextPhotos.length,
           photosUpdated: photosUpdatedCount,
+          internalStatusUpdated: internalStatusUpdatedCount,
           updated: updatedCount
         }
       }
@@ -312,7 +355,12 @@ export async function POST(req: Request) {
       revalidateTag("inventory-initial");
     }
 
-    return NextResponse.json({ ok: true, updated: updatedCount, photosUpdated: photosUpdatedCount });
+    return NextResponse.json({
+      ok: true,
+      updated: updatedCount,
+      photosUpdated: photosUpdatedCount,
+      internalStatusUpdated: internalStatusUpdatedCount
+    });
   } catch (error: any) {
     await prisma.auditLog.create({
       data: {
