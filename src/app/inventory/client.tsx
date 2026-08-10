@@ -182,7 +182,7 @@ type InventorySearchWorkerResultMessage = {
 };
 
 type InventoryPageSizeOption = 100 | 200 | 500 | "ALL";
-type MlSyncFilterValue = "synced" | "notSynced";
+type MlSyncFilterValue = "synced" | "notSynced" | "missingOrInvalid";
 
 const INVENTORY_EXPORT_FIELD_DEFINITIONS = [
   { key: "skuInternal", label: "SKU" },
@@ -274,6 +274,43 @@ const normalizeStatusLabel = (value: unknown) => {
 const hasMlCodeValue = (item: Item) => Boolean((item.mlItemId ?? "").trim().length);
 
 const isMlItemSynced = (item: Item) => hasMlCodeValue(item) && (item.status ?? "").toLowerCase() === "active";
+
+const ML_ITEM_ID_FORMAT_REGEX = /^ML[A-Z]\d+$/i;
+const ML_SYNC_INVALID_SIGNATURES = [
+  "404",
+  "not_found",
+  "resource not found",
+  "item not found",
+  "no se encontro",
+  "no existe",
+  "id invalido",
+  "invalid id",
+  "invalid item",
+  "item_id"
+];
+
+const hasLikelyInvalidMlCode = (item: Item) => {
+  if (!hasMlCodeValue(item)) return false;
+
+  const normalizedMlItemId = (item.mlItemId ?? "").trim().toUpperCase();
+  if (!ML_ITEM_ID_FORMAT_REGEX.test(normalizedMlItemId)) {
+    return true;
+  }
+
+  const syncState = (item.extraData?.ml_fotos_sync_estado ?? "").toString().trim().toLowerCase();
+  const syncMessage = (item.extraData?.ml_fotos_sync_mensaje ?? "").toString().toLowerCase();
+  if (!syncMessage.length) {
+    return false;
+  }
+
+  if (syncState !== "error" && syncState !== "warning") {
+    return false;
+  }
+
+  return ML_SYNC_INVALID_SIGNATURES.some((signature) => syncMessage.includes(signature));
+};
+
+const isMissingOrInvalidMlCode = (item: Item) => !hasMlCodeValue(item) || hasLikelyInvalidMlCode(item);
 
 const normalizeStatusTotals = (value: unknown): Record<string, number> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -4799,12 +4836,15 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     if (!mlSyncFilter) return facetedFilteredItems;
 
     return facetedFilteredItems.filter((item) => {
-      if (!hasMlCodeValue(item)) {
-        return false;
+      if (mlSyncFilter === "synced") {
+        return isMlItemSynced(item);
       }
 
-      const synced = isMlItemSynced(item);
-      return mlSyncFilter === "synced" ? synced : !synced;
+      if (mlSyncFilter === "notSynced") {
+        return hasMlCodeValue(item) && !isMlItemSynced(item);
+      }
+
+      return isMissingOrInvalidMlCode(item);
     });
   }, [facetedFilteredItems, mlSyncFilter]);
 
@@ -4872,15 +4912,22 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     let synced = 0;
     let notSynced = 0;
     let withoutMlCode = 0;
+    let invalidMlCode = 0;
+    let missingOrInvalid = 0;
 
     facetedFilteredItems.forEach((item) => {
-      const hasMlCode = Boolean(item.mlItemId && item.mlItemId.trim().length);
-      if (!hasMlCode) {
+      if (!hasMlCodeValue(item)) {
         withoutMlCode += 1;
+        missingOrInvalid += 1;
         return;
       }
 
-      if ((item.status ?? "").toLowerCase() === "active") {
+      if (hasLikelyInvalidMlCode(item)) {
+        invalidMlCode += 1;
+        missingOrInvalid += 1;
+      }
+
+      if (isMlItemSynced(item)) {
         synced += 1;
       } else {
         notSynced += 1;
@@ -4891,6 +4938,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
       synced,
       notSynced,
       withoutMlCode,
+      invalidMlCode,
+      missingOrInvalid,
       withMlCode: synced + notSynced
     };
   }, [facetedFilteredItems]);
@@ -6375,7 +6424,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                 </p>
                 {mlSyncFilter && (
                   <p className="mt-1 text-cyan-300">
-                    Sync ML: {mlSyncFilter === "synced" ? "Sincronizadas" : "No sincronizadas"}
+                    Sync ML: {mlSyncFilter === "synced" ? "Sincronizadas" : mlSyncFilter === "notSynced" ? "No sincronizadas" : "Sin codigo o invalido"}
                   </p>
                 )}
                 {inventoryRefreshing && !loadingPage ? (
@@ -6570,7 +6619,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                     onClick={() => toggleMlSyncFilter(mlSyncFilter)}
                     className="rounded-full border border-slate-600 bg-slate-900/80 px-2 py-1 text-[11px] text-slate-200 hover:border-amber-300"
                   >
-                    Sync ML: {mlSyncFilter === "synced" ? "Sincronizadas" : "No sincronizadas"}
+                    Sync ML: {mlSyncFilter === "synced" ? "Sincronizadas" : mlSyncFilter === "notSynced" ? "No sincronizadas" : "Sin codigo o invalido"}
                   </button>
                 )}
                 {normalizedPrestadoDebtorFilters.length > 0 && (
@@ -6778,10 +6827,24 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
               <p className="mt-1 text-lg font-semibold text-rose-100">{mlPublicationSyncSummary.notSynced}</p>
               {mlSyncFilter === "notSynced" && <p className="mt-1 text-[10px] text-rose-200">Filtro activo</p>}
             </button>
-            <div className="rounded-xl border border-slate-700 bg-slate-950/50 px-3 py-2">
-              <p className="text-[10px] uppercase tracking-[0.22em] text-slate-400">Sin codigo ML</p>
-              <p className="mt-1 text-lg font-semibold text-slate-200">{mlPublicationSyncSummary.withoutMlCode}</p>
-            </div>
+            <button
+              type="button"
+              onClick={() => toggleMlSyncFilter("missingOrInvalid")}
+              className={`rounded-xl border px-3 py-2 text-left transition ${
+                mlSyncFilter === "missingOrInvalid"
+                  ? "border-slate-300 bg-slate-500/20 shadow-[0_0_0_1px_rgba(148,163,184,0.5)]"
+                  : "border-slate-700 bg-slate-950/50 hover:border-slate-500"
+              }`}
+            >
+              <p className="text-[10px] uppercase tracking-[0.22em] text-slate-400">Sin codigo / invalido</p>
+              <p className="mt-1 text-lg font-semibold text-slate-200">{mlPublicationSyncSummary.missingOrInvalid}</p>
+              <p className="mt-1 text-[10px] text-slate-500">
+                Sin codigo: {mlPublicationSyncSummary.withoutMlCode} · Invalidos: {mlPublicationSyncSummary.invalidMlCode}
+              </p>
+              {mlSyncFilter === "missingOrInvalid" && (
+                <p className="mt-1 text-[10px] text-slate-300">Filtro activo</p>
+              )}
+            </button>
           </div>
           {statusTabOptions.length > 0 && (
             <div className="flex flex-wrap gap-2 rounded-2xl border border-slate-700 bg-slate-900/60 p-3 text-[11px] uppercase tracking-wide text-slate-200">
