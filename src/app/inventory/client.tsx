@@ -253,7 +253,7 @@ const THUMBNAILS_ENABLED = true;
 const NOTIFICATIONS_PAGE_SIZE = 10;
 const NOTIFICATIONS_POLL_INTERVAL_MS = 20_000;
 const TABLE_OVERSCAN_ROWS = 8;
-const INVENTORY_TABLE_COLUMN_COUNT = 35;
+const INVENTORY_TABLE_COLUMN_COUNT = 36;
 const WORKER_SEARCH_MIN_ITEMS = 250;
 const INVENTORY_PAGE_BLOCK_SIZE_DEFAULT = 100;
 const INVENTORY_PAGE_BLOCK_SIZE_ALL_REQUEST = 5000;
@@ -982,6 +982,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   const [inventoryEditSaving, setInventoryEditSaving] = useState(false);
   const [thumbnailVersionById, setThumbnailVersionById] = useState<Record<string, number>>({});
   const [mlAction, setMlAction] = useState<null | "pause" | "activate">(null);
+  const [mlSingleActivatingId, setMlSingleActivatingId] = useState<string | null>(null);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastNotificationIdRef = useRef<string | null>(null);
   const searchWorkerRef = useRef<Worker | null>(null);
@@ -1777,6 +1778,57 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
       }
     },
     [canManageMercadoLibre, items, refresh, selectedIds]
+  );
+
+  const activateSingleMlPublication = useCallback(
+    async (item: Item) => {
+      if (!canManageMercadoLibre) {
+        setMessage("Tu rol no puede activar publicaciones en Mercado Libre");
+        return;
+      }
+
+      const normalizedMlItemId = (item.mlItemId ?? "").trim();
+      if (!normalizedMlItemId.length) {
+        setMessage("Este registro no tiene codigo de Mercado Libre");
+        return;
+      }
+
+      const normalizedStatus = (item.status ?? "").toLowerCase();
+      if (normalizedStatus === "active") {
+        setMessage("Esta publicacion ya esta sincronizada y activa en Mercado Libre");
+        return;
+      }
+
+      setMlSingleActivatingId(item.id);
+      setMessage(null);
+
+      try {
+        const res = await fetch("/api/mercadolibre/items", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids: [item.id], action: "activate" })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.error || "No se pudo activar la publicacion en Mercado Libre");
+        }
+
+        if (Array.isArray(data.failed) && data.failed.length) {
+          const firstReason =
+            typeof data.failed?.[0]?.reason === "string" ? data.failed[0].reason : "Error desconocido";
+          setMessage(`No se pudo activar la publicacion: ${firstReason}`);
+        } else {
+          setMessage(`Publicacion ${item.skuInternal} activada en Mercado Libre`);
+        }
+
+        await refresh();
+      } catch (err: any) {
+        setMessage(err?.message || "No se pudo activar la publicacion en Mercado Libre");
+      } finally {
+        setMlSingleActivatingId(null);
+      }
+    },
+    [canManageMercadoLibre, refresh]
   );
 
   const updateEditedPhotosForFiles = useCallback((nextFiles: File[]) => {
@@ -4762,6 +4814,33 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     return sorted;
   }, [facetedFilteredItems, sortConfig, getItemPieceName, getItemYearLabel]);
 
+  const mlPublicationSyncSummary = useMemo(() => {
+    let synced = 0;
+    let notSynced = 0;
+    let withoutMlCode = 0;
+
+    filteredItems.forEach((item) => {
+      const hasMlCode = Boolean(item.mlItemId && item.mlItemId.trim().length);
+      if (!hasMlCode) {
+        withoutMlCode += 1;
+        return;
+      }
+
+      if ((item.status ?? "").toLowerCase() === "active") {
+        synced += 1;
+      } else {
+        notSynced += 1;
+      }
+    });
+
+    return {
+      synced,
+      notSynced,
+      withoutMlCode,
+      withMlCode: synced + notSynced
+    };
+  }, [filteredItems]);
+
   const effectiveInventoryPageSize =
     inventoryPageSize === "ALL"
       ? useServerPagination
@@ -6580,6 +6659,24 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
               Tu rol no puede pausar o activar publicaciones en Mercado Libre.
             </div>
           ))}
+          <div className="grid grid-cols-1 gap-2 rounded-2xl border border-slate-700 bg-slate-900/60 p-3 text-xs text-slate-200 sm:grid-cols-4">
+            <div className="rounded-xl border border-slate-700 bg-slate-950/50 px-3 py-2">
+              <p className="text-[10px] uppercase tracking-[0.22em] text-slate-400">Con codigo ML</p>
+              <p className="mt-1 text-lg font-semibold text-slate-100">{mlPublicationSyncSummary.withMlCode}</p>
+            </div>
+            <div className="rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-3 py-2">
+              <p className="text-[10px] uppercase tracking-[0.22em] text-emerald-200">Sincronizadas</p>
+              <p className="mt-1 text-lg font-semibold text-emerald-100">{mlPublicationSyncSummary.synced}</p>
+            </div>
+            <div className="rounded-xl border border-rose-400/30 bg-rose-500/10 px-3 py-2">
+              <p className="text-[10px] uppercase tracking-[0.22em] text-rose-200">No sincronizadas</p>
+              <p className="mt-1 text-lg font-semibold text-rose-100">{mlPublicationSyncSummary.notSynced}</p>
+            </div>
+            <div className="rounded-xl border border-slate-700 bg-slate-950/50 px-3 py-2">
+              <p className="text-[10px] uppercase tracking-[0.22em] text-slate-400">Sin codigo ML</p>
+              <p className="mt-1 text-lg font-semibold text-slate-200">{mlPublicationSyncSummary.withoutMlCode}</p>
+            </div>
+          </div>
           {statusTabOptions.length > 0 && (
             <div className="flex flex-wrap gap-2 rounded-2xl border border-slate-700 bg-slate-900/60 p-3 text-[11px] uppercase tracking-wide text-slate-200">
               {statusTabOptions.map((label) => {
@@ -6737,6 +6834,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                   ? "bg-sky-950/40"
                   : "";
                 const photosCount = typeof item.photoCount === "number" ? item.photoCount : 0;
+                const hasMlCode = Boolean(item.mlItemId && item.mlItemId.trim().length);
+                const isMlSynced = hasMlCode && (item.status ?? "").toLowerCase() === "active";
+                const isMlSyncBusy = mlSingleActivatingId === item.id;
+                const canActivateMl = canManageMercadoLibre && hasMlCode && !isMlSynced && !isMlSyncBusy;
                 const previewEnabled = thumbnailsActive && photosCount > 0;
                 const previewSrc = previewEnabled ? getThumbnailSrc(item.id) : null;
 
@@ -6853,6 +6954,36 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                             {internalStatus}
                           </span>
                         )}
+                      </div>
+
+                      <div className="mt-2">
+                        <button
+                          type="button"
+                          disabled={!canActivateMl}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (canActivateMl) {
+                              void activateSingleMlPublication(item);
+                            }
+                          }}
+                          className={`w-full rounded-md border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide transition ${
+                            !hasMlCode
+                              ? "cursor-not-allowed border-slate-700 bg-slate-900/70 text-slate-400"
+                              : isMlSynced
+                              ? "cursor-not-allowed border-emerald-400/50 bg-emerald-500/15 text-emerald-100"
+                              : canManageMercadoLibre
+                              ? "border-rose-400/60 bg-rose-500/15 text-rose-100 hover:bg-rose-500/25"
+                              : "cursor-not-allowed border-rose-400/30 bg-rose-500/10 text-rose-200 opacity-70"
+                          }`}
+                        >
+                          {!hasMlCode
+                            ? "Sin codigo ML"
+                            : isMlSyncBusy
+                            ? "Activando..."
+                            : isMlSynced
+                            ? "Sincronizado"
+                            : "No sincronizado · Activar"}
+                        </button>
                       </div>
 
                       {canEditInventory && (
@@ -6985,6 +7116,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                         </button>
                       </div>
                     </th>
+                    <th className="px-4 py-3 text-left">Sync ML</th>
                     <th className="px-4 py-3 text-left">Descripcion</th>
                     <th className="px-4 py-3 text-left">Descripcion ML</th>
                     <th className="px-4 py-3 text-left">Descripcion local</th>
@@ -7069,6 +7201,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                       ? "bg-sky-950/40"
                       : "";
                     const photosCount = typeof item.photoCount === "number" ? item.photoCount : 0;
+                    const hasMlCode = Boolean(item.mlItemId && item.mlItemId.trim().length);
+                    const isMlSynced = hasMlCode && (item.status ?? "").toLowerCase() === "active";
+                    const isMlSyncBusy = mlSingleActivatingId === item.id;
+                    const canActivateMl = canManageMercadoLibre && hasMlCode && !isMlSynced && !isMlSyncBusy;
                     const mlUrl = item.mlItemId ? `https://articulo.mercadolibre.com.mx/${item.mlItemId}` : null;
                     const previewEnabled = thumbnailsActive && photosCount > 0;
                     const previewSrc = previewEnabled ? getThumbnailSrc(item.id) : null;
@@ -7215,6 +7351,35 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                           )}
                         </td>
                         <td className="px-4 py-3 align-middle text-slate-100">{item.status || "-"}</td>
+                        <td className="px-4 py-3 align-middle text-xs">
+                          <button
+                            type="button"
+                            disabled={!canActivateMl}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              if (canActivateMl) {
+                                void activateSingleMlPublication(item);
+                              }
+                            }}
+                            className={`rounded-md border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide transition ${
+                              !hasMlCode
+                                ? "cursor-not-allowed border-slate-700 bg-slate-900/70 text-slate-400"
+                                : isMlSynced
+                                ? "cursor-not-allowed border-emerald-400/50 bg-emerald-500/15 text-emerald-100"
+                                : canManageMercadoLibre
+                                ? "border-rose-400/60 bg-rose-500/15 text-rose-100 hover:bg-rose-500/25"
+                                : "cursor-not-allowed border-rose-400/30 bg-rose-500/10 text-rose-200 opacity-70"
+                            }`}
+                          >
+                            {!hasMlCode
+                              ? "Sin codigo ML"
+                              : isMlSyncBusy
+                              ? "Activando..."
+                              : isMlSynced
+                              ? "Sincronizado"
+                              : "No sincronizado"}
+                          </button>
+                        </td>
                         <td className="min-w-[240px] px-4 py-3 align-top text-slate-100">
                           <div className="max-w-[320px] truncate">{pieceName}</div>
                         </td>
