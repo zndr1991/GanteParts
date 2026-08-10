@@ -182,6 +182,7 @@ type InventorySearchWorkerResultMessage = {
 };
 
 type InventoryPageSizeOption = 100 | 200 | 500 | "ALL";
+type MlSyncFilterValue = "synced" | "notSynced";
 
 const INVENTORY_EXPORT_FIELD_DEFINITIONS = [
   { key: "skuInternal", label: "SKU" },
@@ -269,6 +270,10 @@ const normalizeStatusLabel = (value: unknown) => {
   const raw = (value ?? "").toString().trim().toUpperCase();
   return raw.length ? raw : "SIN ESTATUS";
 };
+
+const hasMlCodeValue = (item: Item) => Boolean((item.mlItemId ?? "").trim().length);
+
+const isMlItemSynced = (item: Item) => hasMlCodeValue(item) && (item.status ?? "").toLowerCase() === "active";
 
 const normalizeStatusTotals = (value: unknown): Record<string, number> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -880,6 +885,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   const [focusedRowInfo, setFocusedRowInfo] = useState<FocusedInfo | null>(null);
   const [statusFilter, setStatusFilter] = useState<string | null>(normalizedInitialStatusFilter);
   const [statusFilterDraft, setStatusFilterDraft] = useState<string | null>(normalizedInitialStatusFilter);
+  const [mlSyncFilter, setMlSyncFilter] = useState<MlSyncFilterValue | null>(null);
   const [inventoryMarcaFilter, setInventoryMarcaFilter] = useState("");
   const [inventoryMarcaFilterDraft, setInventoryMarcaFilterDraft] = useState("");
   const [inventoryCocheFilter, setInventoryCocheFilter] = useState("");
@@ -1000,6 +1006,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   const manualSkuSequenceCacheRef = useRef(new Map<string, number>());
   const manualSkuRequestAbortRef = useRef<AbortController | null>(null);
   const lastManualSuggestionPrefixRef = useRef<string | null>(null);
+  const tableScrollRafRef = useRef<number | null>(null);
+  const tableScrollTopRef = useRef(0);
+  const desktopScrollStopTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isDesktopTableScrollingRef = useRef(false);
   const isMountedRef = useRef(true);
   const desktopTableContainerRef = useRef<HTMLDivElement | null>(null);
   const desktopSelectAllRef = useRef<HTMLInputElement | null>(null);
@@ -1036,6 +1046,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   const [inventoryPageSize, setInventoryPageSize] = useState<InventoryPageSizeOption>(INVENTORY_PAGE_BLOCK_SIZE_DEFAULT);
   const [inventoryReloadSeq, setInventoryReloadSeq] = useState(0);
   const [tableScrollRowStart, setTableScrollRowStart] = useState(0);
+  const [isDesktopTableScrolling, setIsDesktopTableScrolling] = useState(false);
   const [sectionVisibility, setSectionVisibility] = useState<Record<SectionKey, boolean>>({
     notifications: false,
     manual: true,
@@ -1090,6 +1101,17 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
       setSectionVisibility({ notifications: false, manual: true, import: true });
     }
   }, [isManualOnly, isMobile]);
+
+  useEffect(() => {
+    return () => {
+      if (tableScrollRafRef.current !== null) {
+        cancelAnimationFrame(tableScrollRafRef.current);
+      }
+      if (desktopScrollStopTimeoutRef.current) {
+        clearTimeout(desktopScrollStopTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof Worker === "undefined") {
@@ -4289,6 +4311,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     () => new Set(normalizedPrestadoDebtorFilters),
     [normalizedPrestadoDebtorFilters]
   );
+  const hasActiveMlSyncFilter = mlSyncFilter !== null;
   const hasActiveInventorySearch = normalizedSearchTokenChecks.length > 0;
   const hasActiveInventoryFacets =
     normalizedInventoryMarcaFilter.length > 0 ||
@@ -4296,7 +4319,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     normalizedInventoryPiezaFilter.length > 0 ||
     normalizedPrestadoDebtorFilters.length > 0;
   const hasAnyInventoryFiltersActive =
-    hasActiveInventorySearch || Boolean(normalizedStatusFilter) || hasActiveInventoryFacets;
+    hasActiveInventorySearch || Boolean(normalizedStatusFilter) || hasActiveInventoryFacets || hasActiveMlSyncFilter;
   const hasAnyDraftInventoryFilters =
     searchDraft.trim().length > 0 ||
     Boolean(normalizedStatusFilterDraft) ||
@@ -4318,6 +4341,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     Number(normalizedInventoryMarcaFilter.length > 0) +
     Number(normalizedInventoryCocheFilter.length > 0) +
     Number(normalizedInventoryPiezaFilter.length > 0) +
+    Number(hasActiveMlSyncFilter) +
     Number(normalizedPrestadoDebtorFilters.length > 0);
 
   const clearInventoryFilters = useCallback(() => {
@@ -4332,9 +4356,26 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     setInventoryCocheFilterDraft("");
     setInventoryPiezaFilter("");
     setInventoryPiezaFilterDraft("");
+    setMlSyncFilter(null);
     setPrestadoDebtorFilters([]);
     setInventoryPage(1);
   }, []);
+
+  const toggleMlSyncFilter = useCallback(
+    (nextFilter: MlSyncFilterValue) => {
+      setMlSyncFilter((current) => (current === nextFilter ? null : nextFilter));
+      setInventoryPage(1);
+
+      if (!isMobile) {
+        const container = desktopTableContainerRef.current;
+        if (container) {
+          container.scrollTop = 0;
+        }
+        setTableScrollRowStart(0);
+      }
+    },
+    [isMobile]
+  );
 
   const applyInventorySearch = useCallback(() => {
     const nextSearch = searchDraft.trim();
@@ -4754,8 +4795,21 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     useServerPagination
   ]);
 
+  const mlSyncFilteredItems = useMemo(() => {
+    if (!mlSyncFilter) return facetedFilteredItems;
+
+    return facetedFilteredItems.filter((item) => {
+      if (!hasMlCodeValue(item)) {
+        return false;
+      }
+
+      const synced = isMlItemSynced(item);
+      return mlSyncFilter === "synced" ? synced : !synced;
+    });
+  }, [facetedFilteredItems, mlSyncFilter]);
+
   const filteredItems = useMemo(() => {
-    const filtered = facetedFilteredItems;
+    const filtered = mlSyncFilteredItems;
 
     if (!sortConfig) return filtered;
 
@@ -4812,14 +4866,14 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     });
 
     return sorted;
-  }, [facetedFilteredItems, sortConfig, getItemPieceName, getItemYearLabel]);
+  }, [mlSyncFilteredItems, sortConfig, getItemPieceName, getItemYearLabel]);
 
   const mlPublicationSyncSummary = useMemo(() => {
     let synced = 0;
     let notSynced = 0;
     let withoutMlCode = 0;
 
-    filteredItems.forEach((item) => {
+    facetedFilteredItems.forEach((item) => {
       const hasMlCode = Boolean(item.mlItemId && item.mlItemId.trim().length);
       if (!hasMlCode) {
         withoutMlCode += 1;
@@ -4839,7 +4893,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
       withoutMlCode,
       withMlCode: synced + notSynced
     };
-  }, [filteredItems]);
+  }, [facetedFilteredItems]);
 
   const effectiveInventoryPageSize =
     inventoryPageSize === "ALL"
@@ -4850,10 +4904,13 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
 
   const filteredTotalPages = useMemo(() => {
     if (useServerPagination) {
+      if (mlSyncFilter) {
+        return 1;
+      }
       return Math.max(1, Math.ceil(totalItems / effectiveInventoryPageSize));
     }
     return Math.max(1, Math.ceil(filteredItems.length / effectiveInventoryPageSize));
-  }, [effectiveInventoryPageSize, filteredItems.length, totalItems, useServerPagination]);
+  }, [effectiveInventoryPageSize, filteredItems.length, totalItems, useServerPagination, mlSyncFilter]);
 
   useEffect(() => {
     setInventoryPage(1);
@@ -4863,7 +4920,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     normalizedInventoryMarcaFilter,
     normalizedInventoryCocheFilter,
     normalizedInventoryPiezaFilter,
-    normalizedPrestadoDebtorFilters
+    normalizedPrestadoDebtorFilters,
+    mlSyncFilter
   ]);
 
   useEffect(() => {
@@ -4878,11 +4936,20 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   }, [effectiveInventoryPageSize, filteredItems, inventoryPage, useServerPagination]);
   const shouldVirtualizeDesktop = paginatedFilteredItems.length > 60;
 
-  const visibleBaseTotal = useServerPagination ? totalItems : filteredItems.length;
+  const isLocalMlSyncFilteredView = useServerPagination && mlSyncFilter !== null;
+  const visibleBaseTotal = isLocalMlSyncFilteredView
+    ? filteredItems.length
+    : useServerPagination
+    ? totalItems
+    : filteredItems.length;
   const paginatedVisibleStart = visibleBaseTotal
-    ? (inventoryPage - 1) * effectiveInventoryPageSize + 1
+    ? isLocalMlSyncFilteredView
+      ? 1
+      : (inventoryPage - 1) * effectiveInventoryPageSize + 1
     : 0;
-  const paginatedVisibleEnd = Math.min(inventoryPage * effectiveInventoryPageSize, visibleBaseTotal);
+  const paginatedVisibleEnd = isLocalMlSyncFilteredView
+    ? filteredItems.length
+    : Math.min(inventoryPage * effectiveInventoryPageSize, visibleBaseTotal);
 
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const currentPageSelectionIds = useMemo(
@@ -5020,6 +5087,12 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     if (!container) return;
     container.scrollTop = 0;
     setTableScrollRowStart(0);
+    if (desktopScrollStopTimeoutRef.current) {
+      clearTimeout(desktopScrollStopTimeoutRef.current);
+      desktopScrollStopTimeoutRef.current = null;
+    }
+    isDesktopTableScrollingRef.current = false;
+    setIsDesktopTableScrolling(false);
   }, [
     isMobile,
     normalizedSearch,
@@ -5028,6 +5101,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     normalizedInventoryCocheFilter,
     normalizedInventoryPiezaFilter,
     normalizedPrestadoDebtorFilters,
+    mlSyncFilter,
     sortConfig,
     inventoryPage
   ]);
@@ -6297,8 +6371,13 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
               </div>
               <div className="text-xs text-slate-400 lg:text-right">
                 <p>
-                  Mostrando {paginatedVisibleStart}-{paginatedVisibleEnd} de {useServerPagination ? totalItems : filteredItems.length}
+                  Mostrando {paginatedVisibleStart}-{paginatedVisibleEnd} de {visibleBaseTotal}
                 </p>
+                {mlSyncFilter && (
+                  <p className="mt-1 text-cyan-300">
+                    Sync ML: {mlSyncFilter === "synced" ? "Sincronizadas" : "No sincronizadas"}
+                  </p>
+                )}
                 {inventoryRefreshing && !loadingPage ? (
                   <p className="mt-1 text-amber-300">Actualizando resultados...</p>
                 ) : hybridLocalMode ? (
@@ -6485,6 +6564,15 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                     Pieza: {normalizedInventoryPiezaFilter}
                   </button>
                 )}
+                {mlSyncFilter && (
+                  <button
+                    type="button"
+                    onClick={() => toggleMlSyncFilter(mlSyncFilter)}
+                    className="rounded-full border border-slate-600 bg-slate-900/80 px-2 py-1 text-[11px] text-slate-200 hover:border-amber-300"
+                  >
+                    Sync ML: {mlSyncFilter === "synced" ? "Sincronizadas" : "No sincronizadas"}
+                  </button>
+                )}
                 {normalizedPrestadoDebtorFilters.length > 0 && (
                   <button
                     type="button"
@@ -6664,14 +6752,32 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
               <p className="text-[10px] uppercase tracking-[0.22em] text-slate-400">Con codigo ML</p>
               <p className="mt-1 text-lg font-semibold text-slate-100">{mlPublicationSyncSummary.withMlCode}</p>
             </div>
-            <div className="rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-3 py-2">
+            <button
+              type="button"
+              onClick={() => toggleMlSyncFilter("synced")}
+              className={`rounded-xl border px-3 py-2 text-left transition ${
+                mlSyncFilter === "synced"
+                  ? "border-emerald-300 bg-emerald-500/20 shadow-[0_0_0_1px_rgba(52,211,153,0.5)]"
+                  : "border-emerald-400/30 bg-emerald-500/10 hover:border-emerald-300"
+              }`}
+            >
               <p className="text-[10px] uppercase tracking-[0.22em] text-emerald-200">Sincronizadas</p>
               <p className="mt-1 text-lg font-semibold text-emerald-100">{mlPublicationSyncSummary.synced}</p>
-            </div>
-            <div className="rounded-xl border border-rose-400/30 bg-rose-500/10 px-3 py-2">
+              {mlSyncFilter === "synced" && <p className="mt-1 text-[10px] text-emerald-200">Filtro activo</p>}
+            </button>
+            <button
+              type="button"
+              onClick={() => toggleMlSyncFilter("notSynced")}
+              className={`rounded-xl border px-3 py-2 text-left transition ${
+                mlSyncFilter === "notSynced"
+                  ? "border-rose-300 bg-rose-500/20 shadow-[0_0_0_1px_rgba(244,63,94,0.45)]"
+                  : "border-rose-400/30 bg-rose-500/10 hover:border-rose-300"
+              }`}
+            >
               <p className="text-[10px] uppercase tracking-[0.22em] text-rose-200">No sincronizadas</p>
               <p className="mt-1 text-lg font-semibold text-rose-100">{mlPublicationSyncSummary.notSynced}</p>
-            </div>
+              {mlSyncFilter === "notSynced" && <p className="mt-1 text-[10px] text-rose-200">Filtro activo</p>}
+            </button>
             <div className="rounded-xl border border-slate-700 bg-slate-950/50 px-3 py-2">
               <p className="text-[10px] uppercase tracking-[0.22em] text-slate-400">Sin codigo ML</p>
               <p className="mt-1 text-lg font-semibold text-slate-200">{mlPublicationSyncSummary.withoutMlCode}</p>
@@ -7022,8 +7128,31 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
             ref={desktopTableContainerRef}
             onScroll={(event) => {
               if (!shouldVirtualizeDesktop) return;
-              const nextRowStart = Math.floor(event.currentTarget.scrollTop / tableRowHeight);
-              setTableScrollRowStart((current) => (current === nextRowStart ? current : nextRowStart));
+
+              tableScrollTopRef.current = event.currentTarget.scrollTop;
+              if (!isDesktopTableScrollingRef.current) {
+                isDesktopTableScrollingRef.current = true;
+                setIsDesktopTableScrolling(true);
+              }
+
+              if (desktopScrollStopTimeoutRef.current) {
+                clearTimeout(desktopScrollStopTimeoutRef.current);
+              }
+              desktopScrollStopTimeoutRef.current = setTimeout(() => {
+                isDesktopTableScrollingRef.current = false;
+                setIsDesktopTableScrolling(false);
+                desktopScrollStopTimeoutRef.current = null;
+              }, 140);
+
+              if (tableScrollRafRef.current !== null) {
+                return;
+              }
+
+              tableScrollRafRef.current = window.requestAnimationFrame(() => {
+                tableScrollRafRef.current = null;
+                const nextRowStart = Math.floor(tableScrollTopRef.current / tableRowHeight);
+                setTableScrollRowStart((current) => (current === nextRowStart ? current : nextRowStart));
+              });
             }}
             className="mt-4 overflow-auto rounded-2xl border border-slate-800 bg-slate-950/30 shadow-inner shadow-black/40"
             style={{ maxHeight: tableHeaderHeight + tableViewportHeight }}
@@ -7207,6 +7336,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                     const canActivateMl = canManageMercadoLibre && hasMlCode && !isMlSynced && !isMlSyncBusy;
                     const mlUrl = item.mlItemId ? `https://articulo.mercadolibre.com.mx/${item.mlItemId}` : null;
                     const previewEnabled = thumbnailsActive && photosCount > 0;
+                    const showDesktopPreview = previewEnabled && (!shouldVirtualizeDesktop || !isDesktopTableScrolling);
                     const previewSrc = previewEnabled ? getThumbnailSrc(item.id) : null;
                     return (
                       <tr
@@ -7283,7 +7413,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                               disabled={!canEditInventory}
                               aria-label={photosCount ? "Ver fotos" : "Sin fotos"}
                             >
-                              {previewEnabled ? (
+                              {showDesktopPreview ? (
                                 <>
                                   <span className="absolute inset-0 flex items-center justify-center text-slate-400">Foto</span>
                                   <img
