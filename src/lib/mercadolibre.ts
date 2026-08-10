@@ -193,9 +193,10 @@ export const extractMercadoLibrePictureUrls = (snapshot: any, limit = MAX_ITEM_P
 
   list.forEach((picture: any) => {
     const normalized =
+      // source suele conservar la imagen original; secure_url/url pueden apuntar a variantes.
+      normalizeHttpUrl(picture?.source) ||
       normalizeHttpUrl(picture?.secure_url) ||
-      normalizeHttpUrl(picture?.url) ||
-      normalizeHttpUrl(picture?.source);
+      normalizeHttpUrl(picture?.url);
     if (normalized) {
       sources.push(normalized);
     }

@@ -247,8 +247,8 @@ const brandOptions = [
 const deletePasswordSecret = (process.env.NEXT_PUBLIC_DELETE_PASSWORD ?? "").trim();
 
 const MAX_PHOTOS = MAX_ITEM_PHOTOS;
-const MAX_PHOTO_DIMENSION = 1280; // ancho/alto maximo al comprimir
-const PHOTO_QUALITY = 0.8; // calidad JPEG al recomprimir
+const MAX_PHOTO_DIMENSION = 2400; // ancho/alto maximo al comprimir
+const PHOTO_QUALITY = 0.94; // calidad JPEG/WEBP al recomprimir
 const drawingColors = ["#f87171", "#facc15", "#4ade80", "#38bdf8", "#f472b6", "#ffffff"];
 const THUMBNAILS_ENABLED = true;
 const NOTIFICATIONS_PAGE_SIZE = 10;
@@ -441,15 +441,39 @@ const readFileAsDataUrl = (file: File) =>
     reader.readAsDataURL(file);
   });
 
+const DATA_URL_MIME_REGEX = /^data:(image\/[a-z0-9.+-]+)?;base64,/i;
+
+const getDataUrlMimeType = (dataUrl: string) => {
+  const match = dataUrl.match(DATA_URL_MIME_REGEX);
+  const mimeType = (match?.[1] ?? "image/jpeg").toLowerCase();
+  if (!mimeType.startsWith("image/")) return "image/jpeg";
+  return mimeType;
+};
+
+const resolveCanvasOutputMimeType = (inputMimeType: string) => {
+  if (inputMimeType === "image/png") return "image/png";
+  if (inputMimeType === "image/webp") return "image/webp";
+  if (inputMimeType === "image/jpeg" || inputMimeType === "image/jpg") return "image/jpeg";
+  return "image/jpeg";
+};
+
 const normalizeDataUrlSize = (dataUrl: string) =>
   new Promise<string>((resolve) => {
     try {
+      const inputMimeType = getDataUrlMimeType(dataUrl);
       const img = new Image();
       img.onload = () => {
         const maxDim = MAX_PHOTO_DIMENSION;
         const width = img.width || maxDim;
         const height = img.height || maxDim;
         const needsResize = width > maxDim || height > maxDim;
+
+        // Evita pérdida de calidad: no recomprimir si ya está dentro del tamaño permitido.
+        if (!needsResize) {
+          resolve(dataUrl);
+          return;
+        }
+
         const scale = needsResize ? Math.min(maxDim / width, maxDim / height) : 1;
         const targetWidth = Math.max(1, Math.round(width * scale));
         const targetHeight = Math.max(1, Math.round(height * scale));
@@ -461,8 +485,15 @@ const normalizeDataUrlSize = (dataUrl: string) =>
           resolve(dataUrl);
           return;
         }
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
         ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
-        resolve(canvas.toDataURL("image/jpeg", PHOTO_QUALITY));
+        const outputMimeType = resolveCanvasOutputMimeType(inputMimeType);
+        if (outputMimeType === "image/png") {
+          resolve(canvas.toDataURL(outputMimeType));
+          return;
+        }
+        resolve(canvas.toDataURL(outputMimeType, PHOTO_QUALITY));
       };
       img.onerror = () => resolve(dataUrl);
       img.src = dataUrl;
