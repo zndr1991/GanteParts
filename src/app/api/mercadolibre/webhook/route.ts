@@ -263,14 +263,30 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true });
   }
 
+  const linkedAccounts = await prisma.mercadoLibreAccount.findMany({
+    where: { mlUserId },
+    select: { userId: true }
+  });
+  const linkedOwnerIds = Array.from(new Set(linkedAccounts.map((entry) => entry.userId).filter(Boolean)));
+
   try {
     const snapshot = await fetchItemSnapshotByMlUserId(mlUserId, itemId);
     const nextStatus = mapStatus(snapshot?.status);
     const nextStock = typeof snapshot?.available_quantity === "number" ? snapshot.available_quantity : null;
     const nextPhotos = extractMercadoLibrePictureUrls(snapshot);
 
-    const matchedItems = await prisma.inventoryItem.findMany({
-      where: { mlItemId: itemId, ownerId: account.userId },
+    let matchScope: "linked-owners" | "global-fallback" = "linked-owners";
+
+    let matchedItems = await prisma.inventoryItem.findMany({
+      where: {
+        mlItemId: {
+          equals: itemId,
+          mode: "insensitive"
+        },
+        ownerId: {
+          in: linkedOwnerIds.length ? linkedOwnerIds : [account.userId]
+        }
+      },
       select: {
         id: true,
         status: true,
@@ -278,6 +294,24 @@ export async function POST(req: Request) {
         extraData: true
       }
     });
+
+    if (!matchedItems.length) {
+      matchScope = "global-fallback";
+      matchedItems = await prisma.inventoryItem.findMany({
+        where: {
+          mlItemId: {
+            equals: itemId,
+            mode: "insensitive"
+          }
+        },
+        select: {
+          id: true,
+          status: true,
+          stock: true,
+          extraData: true
+        }
+      });
+    }
 
     let updatedCount = 0;
     let photosUpdatedCount = 0;
@@ -342,6 +376,10 @@ export async function POST(req: Request) {
           itemId,
           status: snapshot?.status ?? null,
           mappedStatus: nextStatus,
+          linkedOwnerIds,
+          linkedOwnerCount: linkedOwnerIds.length,
+          matchedCount: matchedItems.length,
+          matchScope,
           stock: nextStock,
           photosDetected: nextPhotos.length,
           photosUpdated: photosUpdatedCount,
