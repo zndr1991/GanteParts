@@ -8,7 +8,7 @@ import { PanelRoutePrefetch } from "@/components/panel-route-prefetch";
 type Shortcut = {
   href: Route;
   title: string;
-  icon: "inventory" | "new" | "loan" | "public" | "users";
+  icon: "inventory" | "new" | "loan" | "finance" | "public" | "users";
   roles?: string[];
 };
 
@@ -27,6 +27,11 @@ const shortcuts: Shortcut[] = [
     href: "/inventory/prestadas",
     title: "PRESTADO",
     icon: "loan"
+  },
+  {
+    href: "/finanzas",
+    title: "CONTROL DE GASTOS",
+    icon: "finance"
   },
   {
     href: "/public-inventory",
@@ -61,6 +66,14 @@ function ShortcutIcon({ icon }: { icon: Shortcut["icon"] }) {
         <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
           <path d="M4 12h8m0 0-3-3m3 3-3 3" strokeLinecap="round" strokeLinejoin="round" />
           <path d="M14 7h6v10h-6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case "finance":
+      return (
+        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+          <path d="M4 19h16" strokeLinecap="round" />
+          <path d="M7 15v-4M12 15V8m5 7v-2" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M8.5 6.5c.7-.7 1.6-1.1 2.5-1.1 1.7 0 3.1 1.2 3.1 2.6 0 2-2.5 2.4-2.5 3.9" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       );
     case "public":
