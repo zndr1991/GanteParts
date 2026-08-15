@@ -273,6 +273,21 @@ const normalizeStatusLabel = (value: unknown) => {
   return raw.length ? raw : "SIN ESTATUS";
 };
 
+const getMlStatusReasonLabel = (extraData: Record<string, any> | null | undefined, status: string | null | undefined) => {
+  const normalizedStatus = (status ?? "").toString().trim().toLowerCase();
+  if (normalizedStatus !== "paused" && normalizedStatus !== "inactive") return null;
+
+  const explicitLabel = (extraData?.ml_status_reason_label ?? "").toString().trim();
+  if (explicitLabel.length) return explicitLabel;
+
+  const reasonCode = (extraData?.ml_status_reason ?? "").toString().trim().toLowerCase();
+  if (reasonCode === "sold_ml") return "Vendido en Mercado Libre";
+  if (reasonCode === "paused_ml") return "Pausado directamente en Mercado Libre";
+  if (reasonCode === "inactive_ml_other") return "Inactivo en Mercado Libre (no venta)";
+  if (reasonCode === "app_pause_sync") return "Pausa enviada desde la app";
+  return null;
+};
+
 const hasMlCodeValue = (item: Item) => Boolean((item.mlItemId ?? "").trim().length);
 
 const isMlItemSynced = (item: Item) => hasMlCodeValue(item) && (item.status ?? "").toLowerCase() === "active";
@@ -7087,6 +7102,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                 const canActivateMl = canManageMercadoLibre && hasMlCode && !isMlSynced && !isMlSyncBusy;
                 const previewEnabled = thumbnailsActive && photosCount > 0;
                 const previewSrc = previewEnabled ? getThumbnailSrc(item.id) : null;
+                const mlStatusReasonLabel = getMlStatusReasonLabel(extra, item.status);
 
                 return (
                   <article
@@ -7231,6 +7247,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                             ? "Sincronizado"
                             : "No sincronizado · Activar"}
                         </button>
+                        {mlStatusReasonLabel && (
+                          <p className="mt-1 text-[11px] text-amber-300">{mlStatusReasonLabel}</p>
+                        )}
                       </div>
 
                       {canEditInventory && (
@@ -7479,6 +7498,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                     const previewEnabled = thumbnailsActive && photosCount > 0;
                     const showDesktopPreview = previewEnabled && (!shouldVirtualizeDesktop || !isDesktopTableScrolling);
                     const previewSrc = previewEnabled ? getThumbnailSrc(item.id) : null;
+                    const mlStatusReasonLabel = getMlStatusReasonLabel(extra, item.status);
                     return (
                       <tr
                         key={item.id}
@@ -7621,7 +7641,14 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                             <span className="text-slate-200">{item.mlItemId || "-"}</span>
                           )}
                         </td>
-                        <td className="px-4 py-3 align-middle text-slate-100">{item.status || "-"}</td>
+                        <td className="px-4 py-3 align-middle text-slate-100">
+                          <div className="flex flex-col gap-1">
+                            <span>{item.status || "-"}</span>
+                            {mlStatusReasonLabel && (
+                              <span className="text-[10px] uppercase tracking-wide text-amber-300">{mlStatusReasonLabel}</span>
+                            )}
+                          </div>
+                        </td>
                         <td className="px-4 py-3 align-middle text-xs">
                           <button
                             type="button"

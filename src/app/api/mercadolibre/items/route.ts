@@ -7,6 +7,17 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { activateItem, getMercadoLibreAccount, pauseItem } from "@/lib/mercadolibre";
 
+const ML_APP_STATUS_SYNC_AT_KEY = "ml_app_status_sync_at";
+const ML_APP_STATUS_SYNC_TO_KEY = "ml_app_status_sync_to";
+const ML_APP_STATUS_SYNC_SOURCE_KEY = "ml_app_status_sync_source";
+
+const toExtraDataObject = (value: unknown) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {} as Record<string, any>;
+  }
+  return { ...(value as Record<string, any>) };
+};
+
 const actionSchema = z.object({
   ids: z.array(z.string().min(1)).min(1),
   action: z.enum(["pause", "activate"])
@@ -65,10 +76,24 @@ export async function POST(req: Request) {
     try {
       if (action === "pause") {
         await pauseItem(session.user.id, item.mlItemId);
-        await prisma.inventoryItem.update({ where: { id: item.id }, data: { status: "paused" } });
+        const nextExtra = toExtraDataObject(item.extraData);
+        nextExtra[ML_APP_STATUS_SYNC_AT_KEY] = new Date().toISOString();
+        nextExtra[ML_APP_STATUS_SYNC_TO_KEY] = "paused";
+        nextExtra[ML_APP_STATUS_SYNC_SOURCE_KEY] = "APP_BULK_ML_PAUSE";
+        await prisma.inventoryItem.update({
+          where: { id: item.id },
+          data: { status: "paused", extraData: nextExtra }
+        });
       } else if (action === "activate") {
         await activateItem(session.user.id, item.mlItemId);
-        await prisma.inventoryItem.update({ where: { id: item.id }, data: { status: "active" } });
+        const nextExtra = toExtraDataObject(item.extraData);
+        delete nextExtra[ML_APP_STATUS_SYNC_AT_KEY];
+        delete nextExtra[ML_APP_STATUS_SYNC_TO_KEY];
+        delete nextExtra[ML_APP_STATUS_SYNC_SOURCE_KEY];
+        await prisma.inventoryItem.update({
+          where: { id: item.id },
+          data: { status: "active", extraData: nextExtra }
+        });
       }
       successCount += 1;
     } catch (error: any) {

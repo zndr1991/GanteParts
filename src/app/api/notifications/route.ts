@@ -59,14 +59,18 @@ function buildMessage(params: {
   success: boolean;
   error: string | null;
   piece: string | null;
+  statusReasonLabel: string | null;
 }) {
-  const { status, success, error, piece } = params;
+  const { status, success, error, piece, statusReasonLabel } = params;
   const pieceLabel = piece ? `la pieza ${piece}` : "la pieza";
   if (error) {
     return `No se pudo sincronizar ${pieceLabel}: ${error}`;
   }
   if (!success) {
     return `${pieceLabel} no pudo actualizarse en la base interna`;
+  }
+  if (statusReasonLabel) {
+    return `${pieceLabel}: ${statusReasonLabel}`;
   }
   if (!status) {
     return `${pieceLabel} se sincronizo`;
@@ -249,6 +253,7 @@ export async function GET(req: Request) {
     const normalizedMlItemId = normalizedMlByLogId.get(log.id) ?? null;
     const derivedItemId = normalizedMlItemId ?? itemId ?? payloadResource;
     const status = typeof metadata.mappedStatus === "string" ? metadata.mappedStatus : typeof metadata.status === "string" ? metadata.status : null;
+    const metadataStatusReasonLabel = trimOrNull(metadata.mlStatusReasonLabel) ?? trimOrNull(metadata.statusReasonLabel);
     const updated = typeof metadata.updated === "number" ? metadata.updated : null;
     const error = typeof metadata.error === "string" ? metadata.error : null;
     const success = error ? false : updated === null ? true : updated > 0;
@@ -268,6 +273,7 @@ export async function GET(req: Request) {
     const photos = sanitizePhotosArray(extraData.photos, 1);
     const photoPreview = photos[0] ?? null;
     const skuInternal = linkedItem?.skuInternal ?? null;
+    const statusReasonLabel = metadataStatusReasonLabel ?? trimOrNull(extraData.ml_status_reason_label);
 
     return {
       id: log.id,
@@ -282,7 +288,7 @@ export async function GET(req: Request) {
       ubicacion,
       skuInternal,
       photoPreview,
-      message: buildMessage({ status, success, error, piece })
+      message: buildMessage({ status, success, error, piece, statusReasonLabel })
     };
   });
 

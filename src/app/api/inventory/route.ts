@@ -13,6 +13,9 @@ const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 5000;
 const STATUS_TOTALS_CACHE_TTL_MS = 12 * 1000;
 const MAX_SEARCH_TOKENS = 4;
+const ML_APP_STATUS_SYNC_AT_KEY = "ml_app_status_sync_at";
+const ML_APP_STATUS_SYNC_TO_KEY = "ml_app_status_sync_to";
+const ML_APP_STATUS_SYNC_SOURCE_KEY = "ml_app_status_sync_source";
 
 const canEditInventory = (role?: string | null) => {
   const normalized = (role ?? "").toLowerCase();
@@ -1396,6 +1399,7 @@ export async function PATCH(req: Request) {
   const mlSyncErrors: string[] = [];
   const mlSyncWarnings: string[] = [];
   let mlPhotosSyncMetadata: Record<string, unknown> | null = null;
+  let mlStatusSyncedTo: "paused" | "active" | null = null;
 
   if (photos !== undefined) {
     if (!nextMlItemId) {
@@ -1456,12 +1460,25 @@ export async function PATCH(req: Request) {
     try {
       if (status === "paused") {
         await pauseItem(session.user.id, nextMlItemId);
+        mlStatusSyncedTo = "paused";
       } else if (status === "active") {
         await activateItem(session.user.id, nextMlItemId);
+        mlStatusSyncedTo = "active";
       }
     } catch (err: any) {
       mlSyncErrors.push(`Estatus ML: ${err?.message || "No se pudo sincronizar con Mercado Libre"}`);
     }
+  }
+
+  if (mlStatusSyncedTo === "paused") {
+    nextExtra[ML_APP_STATUS_SYNC_AT_KEY] = new Date().toISOString();
+    nextExtra[ML_APP_STATUS_SYNC_TO_KEY] = "paused";
+    nextExtra[ML_APP_STATUS_SYNC_SOURCE_KEY] =
+      (estatusInterno ?? "").toString().trim().toUpperCase() || "APP_MANUAL";
+  } else if (mlStatusSyncedTo === "active") {
+    delete nextExtra[ML_APP_STATUS_SYNC_AT_KEY];
+    delete nextExtra[ML_APP_STATUS_SYNC_TO_KEY];
+    delete nextExtra[ML_APP_STATUS_SYNC_SOURCE_KEY];
   }
 
   if (photos !== undefined) {

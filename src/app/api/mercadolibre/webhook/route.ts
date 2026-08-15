@@ -20,6 +20,11 @@ const STATUS_MAPPING: Record<string, string> = {
 
 const INTERNAL_STATUS_PAUSED_BY_ML = "PAUSADO POR MERCADO LIBRE";
 const INTERNAL_STATUS_ACTIVE_ML = "ML";
+const ML_APP_STATUS_SYNC_AT_KEY = "ml_app_status_sync_at";
+const ML_APP_STATUS_SYNC_TO_KEY = "ml_app_status_sync_to";
+const ML_APP_STATUS_SYNC_SOURCE_KEY = "ml_app_status_sync_source";
+const APP_STATUS_SYNC_GUARD_MS = 30 * 60 * 1000;
+const INTERNAL_STATUS_PRESERVED_ON_ML_PAUSE = new Set(["PRESTADO", "VENDIDO", "SIN SUBIR"]);
 
 const SUPPORTED_TOPICS = new Set(["items"]);
 
@@ -102,11 +107,63 @@ function normalizeInternalStatus(value: unknown) {
   return raw.length ? raw : "SIN ESTATUS";
 }
 
+function toFiniteNumber(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return parsed;
+}
+
+function toStringArray(value: unknown) {
+  if (!Array.isArray(value)) return [] as string[];
+  return value
+    .map((entry) => (entry ?? "").toString().trim().toLowerCase())
+    .filter((entry) => entry.length);
+}
+
+function setExtraField(extra: Record<string, any>, key: string, value: unknown) {
+  if (value === null || value === undefined || value === "") {
+    delete extra[key];
+    return;
+  }
+  extra[key] = value;
+}
+
+function getAppPauseGuardState(extra: Record<string, any>, nextStatus: string) {
+  const guardTo = (extra[ML_APP_STATUS_SYNC_TO_KEY] ?? "").toString().trim().toLowerCase();
+  const guardAtRaw = (extra[ML_APP_STATUS_SYNC_AT_KEY] ?? "").toString().trim();
+  const guardSourceRaw = (extra[ML_APP_STATUS_SYNC_SOURCE_KEY] ?? "").toString().trim();
+
+  const guardSource = guardSourceRaw.length ? guardSourceRaw : null;
+
+  if (nextStatus !== "paused" && nextStatus !== "inactive") {
+    return { active: false, expired: false, source: guardSource };
+  }
+
+  if (guardTo !== "paused" && guardTo !== "inactive") {
+    return { active: false, expired: false, source: guardSource };
+  }
+
+  const parsedAt = Date.parse(guardAtRaw);
+  if (!Number.isFinite(parsedAt)) {
+    return { active: false, expired: false, source: guardSource };
+  }
+
+  const ageMs = Date.now() - parsedAt;
+  if (!Number.isFinite(ageMs) || ageMs < 0) {
+    return { active: false, expired: false, source: guardSource };
+  }
+
+  const expired = ageMs > APP_STATUS_SYNC_GUARD_MS;
+  return { active: !expired, expired, source: guardSource };
+}
+
 function resolveInternalStatusFromMercadoLibre(params: {
   nextStatus: string;
   currentInternalStatus: string;
+  preserveOnPause: boolean;
 }) {
-  const { nextStatus, currentInternalStatus } = params;
+  const { nextStatus, currentInternalStatus, preserveOnPause } = params;
 
   if (nextStatus === "active") {
     if (currentInternalStatus === INTERNAL_STATUS_PAUSED_BY_ML) {
@@ -116,6 +173,9 @@ function resolveInternalStatusFromMercadoLibre(params: {
   }
 
   if (nextStatus === "paused" || nextStatus === "inactive") {
+    if (preserveOnPause) {
+      return null;
+    }
     if (currentInternalStatus !== INTERNAL_STATUS_PAUSED_BY_ML) {
       return INTERNAL_STATUS_PAUSED_BY_ML;
     }
@@ -316,6 +376,9 @@ export async function POST(req: Request) {
     let updatedCount = 0;
     let photosUpdatedCount = 0;
     let internalStatusUpdatedCount = 0;
+    let soldByMlCount = 0;
+    let appPauseGuardAppliedCount = 0;
+    const statusReasonTotals: Record<string, number> = {};
 
     for (const matched of matchedItems) {
       const nextExtra = toExtraDataObject(matched.extraData);
@@ -326,14 +389,75 @@ export async function POST(req: Request) {
       const photosChanged = !areStringArraysEqual(currentPhotos, nextPhotos);
       const statusChanged = matched.status !== nextStatus;
       const stockChanged = typeof nextStock === "number" && matched.stock !== nextStock;
+      const rawSnapshotStatus = typeof snapshot?.status === "string" ? snapshot.status.toLowerCase() : null;
+      const subStatuses = toStringArray(snapshot?.sub_status);
+      const soldQuantity = toFiniteNumber(snapshot?.sold_quantity);
+      const availableQuantity = toFiniteNumber(snapshot?.available_quantity);
+      const previousSoldQuantity = toFiniteNumber(nextExtra.ml_sold_quantity);
+      const previousAvailableQuantity = toFiniteNumber(nextExtra.ml_available_quantity);
+      const soldIncreased =
+        soldQuantity !== null && (previousSoldQuantity === null ? soldQuantity > 0 : soldQuantity > previousSoldQuantity);
+      const soldOutHint = subStatuses.includes("out_of_stock") || (availableQuantity !== null && availableQuantity <= 0);
+      const soldByMl =
+        soldIncreased ||
+        ((rawSnapshotStatus === "closed" || rawSnapshotStatus === "inactive") &&
+          soldQuantity !== null &&
+          soldQuantity > 0 &&
+          soldOutHint);
+
+      const appPauseGuard = getAppPauseGuardState(nextExtra, nextStatus);
+      const preserveByBusinessStatus = INTERNAL_STATUS_PRESERVED_ON_ML_PAUSE.has(
+        normalizeInternalStatus(nextExtra.estatus_interno)
+      );
+
+      let mlStatusReason = "active";
+      let mlStatusReasonLabel: string | null = null;
+      if (nextStatus === "paused" || nextStatus === "inactive") {
+        if (soldByMl) {
+          mlStatusReason = "sold_ml";
+          mlStatusReasonLabel = "Vendido en Mercado Libre";
+        } else if (preserveByBusinessStatus || appPauseGuard.active) {
+          mlStatusReason = "app_pause_sync";
+          mlStatusReasonLabel = preserveByBusinessStatus
+            ? "Pausa por estatus interno en la app"
+            : "Pausa enviada desde la app";
+        } else if (nextStatus === "paused") {
+          mlStatusReason = "paused_ml";
+          mlStatusReasonLabel = "Pausado directamente en Mercado Libre";
+        } else {
+          mlStatusReason = "inactive_ml_other";
+          mlStatusReasonLabel = "Inactivo en Mercado Libre (no venta)";
+        }
+      }
+
+      const previousReason = (nextExtra.ml_status_reason ?? "").toString().trim().toLowerCase() || null;
+      const previousReasonLabel = (nextExtra.ml_status_reason_label ?? "").toString().trim() || null;
+      const nextSubStatusValue = subStatuses.length ? subStatuses.join(",") : null;
+      const previousSubStatusValue = (nextExtra.ml_status_sub_status ?? "").toString().trim() || null;
+      const hasAppPauseMarker =
+        (nextExtra[ML_APP_STATUS_SYNC_AT_KEY] ?? "").toString().trim().length > 0 ||
+        (nextExtra[ML_APP_STATUS_SYNC_TO_KEY] ?? "").toString().trim().length > 0 ||
+        (nextExtra[ML_APP_STATUS_SYNC_SOURCE_KEY] ?? "").toString().trim().length > 0;
+      const shouldClearAppPauseMarker =
+        hasAppPauseMarker && (nextStatus === "active" || appPauseGuard.expired || mlStatusReason === "sold_ml");
+      const reasonMetadataChanged =
+        previousReason !== mlStatusReason ||
+        previousReasonLabel !== mlStatusReasonLabel ||
+        previousSoldQuantity !== soldQuantity ||
+        previousAvailableQuantity !== availableQuantity ||
+        previousSubStatusValue !== nextSubStatusValue ||
+        shouldClearAppPauseMarker;
+
       const currentInternalStatus = normalizeInternalStatus(nextExtra.estatus_interno);
       const nextInternalStatus = resolveInternalStatusFromMercadoLibre({
         nextStatus,
-        currentInternalStatus
+        currentInternalStatus,
+        preserveOnPause:
+          preserveByBusinessStatus || (appPauseGuard.active && mlStatusReason === "app_pause_sync")
       });
       const internalStatusChanged = typeof nextInternalStatus === "string";
 
-      if (!photosChanged && !statusChanged && !stockChanged && !internalStatusChanged) {
+      if (!photosChanged && !statusChanged && !stockChanged && !internalStatusChanged && !reasonMetadataChanged) {
         continue;
       }
 
@@ -350,6 +474,28 @@ export async function POST(req: Request) {
         nextExtra.estatus_interno = nextInternalStatus;
         internalStatusUpdatedCount += 1;
       }
+
+      setExtraField(nextExtra, "ml_status_reason", mlStatusReason);
+      setExtraField(nextExtra, "ml_status_reason_label", mlStatusReasonLabel);
+      setExtraField(nextExtra, "ml_status_sub_status", nextSubStatusValue);
+      setExtraField(nextExtra, "ml_status_raw", rawSnapshotStatus);
+      setExtraField(nextExtra, "ml_sold_quantity", soldQuantity);
+      setExtraField(nextExtra, "ml_available_quantity", availableQuantity);
+      nextExtra.ml_status_synced_at = new Date().toISOString();
+
+      if (shouldClearAppPauseMarker) {
+        delete nextExtra[ML_APP_STATUS_SYNC_AT_KEY];
+        delete nextExtra[ML_APP_STATUS_SYNC_TO_KEY];
+        delete nextExtra[ML_APP_STATUS_SYNC_SOURCE_KEY];
+      }
+
+      if (soldByMl) {
+        soldByMlCount += 1;
+      }
+      if (appPauseGuard.active && mlStatusReason === "app_pause_sync") {
+        appPauseGuardAppliedCount += 1;
+      }
+      statusReasonTotals[mlStatusReason] = (statusReasonTotals[mlStatusReason] ?? 0) + 1;
 
       nextExtra.ml_fotos_sync_at = new Date().toISOString();
       nextExtra.ml_fotos_sync_estado = "ok";
@@ -384,6 +530,9 @@ export async function POST(req: Request) {
           photosDetected: nextPhotos.length,
           photosUpdated: photosUpdatedCount,
           internalStatusUpdated: internalStatusUpdatedCount,
+          soldByMlCount,
+          appPauseGuardAppliedCount,
+          statusReasonTotals,
           updated: updatedCount
         }
       }
@@ -397,7 +546,10 @@ export async function POST(req: Request) {
       ok: true,
       updated: updatedCount,
       photosUpdated: photosUpdatedCount,
-      internalStatusUpdated: internalStatusUpdatedCount
+      internalStatusUpdated: internalStatusUpdatedCount,
+      soldByMlCount,
+      appPauseGuardAppliedCount,
+      statusReasonTotals
     });
   } catch (error: any) {
     await prisma.auditLog.create({
