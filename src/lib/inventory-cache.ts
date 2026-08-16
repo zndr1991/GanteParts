@@ -1,6 +1,7 @@
 import { unstable_cache } from "next/cache";
 import type { InventoryClientItem } from "@/app/inventory/client";
-import { getInventoryFullSnapshot } from "@/lib/inventory-full-snapshot";
+import { getCachedInventoryFullSnapshot, getInventoryFullSnapshot } from "@/lib/inventory-full-snapshot";
+import { prisma } from "@/lib/prisma";
 import { serializeInventoryItem } from "@/lib/inventory-serialization";
 import { fetchInventoryItemsSafely } from "@/lib/inventory-safe-load";
 
@@ -24,15 +25,61 @@ const resolveRequestedTake = (take: number) => {
   return Number.isFinite(take) && take > 0 ? Math.floor(take) : MAX_CACHE_TAKE;
 };
 
-export const getInventorySnapshot = async (ownerId: string | null, _take?: number) => {
-  const snapshot = await getInventoryFullSnapshot(ownerId);
+const normalizeStatusLabel = (value: unknown) => {
+  const raw = (value ?? "").toString().trim().toUpperCase();
+  return raw.length ? raw : "SIN ESTATUS";
+};
+
+const buildStatusTotalsFromItems = (items: InventoryClientItem[]) => {
+  const totals: Record<string, number> = {};
+  items.forEach((item) => {
+    const key = normalizeStatusLabel(item.extraData?.estatus_interno);
+    totals[key] = (totals[key] ?? 0) + 1;
+  });
+  return totals;
+};
+
+export const getInventorySnapshot = async (ownerId: string | null, take?: number) => {
+  const snapshot = getCachedInventoryFullSnapshot(ownerId);
+  if (snapshot) {
+    return {
+      items: snapshot.items as InventoryClientItem[],
+      total: snapshot.total,
+      statusTotals: snapshot.statusTotals,
+      skippedCount: snapshot.skippedCount,
+      complete: snapshot.complete,
+      truncated: snapshot.truncated
+    };
+  }
+
+  // Calienta snapshot completo para requests subsecuentes sin bloquear esta respuesta SSR.
+  void getInventoryFullSnapshot(ownerId).catch(() => undefined);
+
+  const where = resolveSnapshotWhere(ownerId);
+  const requested = resolveRequestedTake(take ?? MAX_CACHE_TAKE);
+  const [total, safeItems] = await Promise.all([
+    prisma.inventoryItem.count({ where }),
+    fetchInventoryItemsSafely({
+      where,
+      take: requested
+    })
+  ]);
+
+  const plainItems = safeItems.items.map((item) => serializeInventoryItem(item) as InventoryClientItem);
+  const truncated = plainItems.length < total;
+  const statusTotals = buildStatusTotalsFromItems(plainItems);
+
+  if (safeItems.skippedIds.length) {
+    console.error(`Inventory snapshot omitio ${safeItems.skippedIds.length} registros con texto invalido`);
+  }
+
   return {
-    items: snapshot.items as InventoryClientItem[],
-    total: snapshot.total,
-    statusTotals: snapshot.statusTotals,
-    skippedCount: snapshot.skippedCount,
-    complete: snapshot.complete,
-    truncated: snapshot.truncated
+    items: plainItems,
+    total,
+    statusTotals,
+    skippedCount: safeItems.skippedIds.length,
+    complete: !truncated,
+    truncated
   };
 };
 

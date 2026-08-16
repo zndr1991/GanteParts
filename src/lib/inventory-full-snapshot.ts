@@ -65,6 +65,17 @@ export const invalidateInventoryFullSnapshot = () => {
   snapshotInFlight.clear();
 };
 
+export const getCachedInventoryFullSnapshot = (ownerId: string | null): InventoryFullSnapshot | null => {
+  const key = snapshotCacheKey(ownerId);
+  const cached = snapshotCache.get(key);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    snapshotCache.delete(key);
+    return null;
+  }
+  return cached.value;
+};
+
 const buildStatusTotals = (items: InventorySnapshotItem[]) => {
   const totals: Record<string, number> = {};
   items.forEach((item) => {
