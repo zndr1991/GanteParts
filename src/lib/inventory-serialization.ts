@@ -14,11 +14,19 @@ export const INVENTORY_LIST_SELECT = {
   updatedAt: true
 } as const;
 
+const extractPhotoSource = (entry: unknown): string => {
+  if (typeof entry === "string") return entry.trim();
+  if (!entry || typeof entry !== "object") return "";
+  const record = entry as Record<string, unknown>;
+  const candidate = record.url ?? record.dataUrl ?? record.src ?? record.preview ?? record.source;
+  return typeof candidate === "string" ? candidate.trim() : "";
+};
+
 export const sanitizePhotosArray = (value: unknown, limit = MAX_ITEM_PHOTOS): string[] => {
   if (!value) return [];
   if (Array.isArray(value)) {
     return value
-      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+      .map((entry) => extractPhotoSource(entry))
       .filter((entry) => entry.length)
       .slice(0, limit);
   }
@@ -26,7 +34,8 @@ export const sanitizePhotosArray = (value: unknown, limit = MAX_ITEM_PHOTOS): st
     const trimmed = value.trim();
     return trimmed.length ? [trimmed] : [];
   }
-  return [];
+  const fromObject = extractPhotoSource(value);
+  return fromObject.length ? [fromObject] : [];
 };
 
 export type SanitizedExtraData = {

@@ -2,6 +2,7 @@ import { auth } from "@/lib/auth";
 import { isInventoryLocalUploadPath, normalizeInventoryPhotoSource, toInventoryPhotoClientSrc } from "@/lib/inventory-photos";
 import { MAX_ITEM_PHOTOS, sanitizePhotosArray } from "@/lib/inventory-serialization";
 import { prisma } from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -15,22 +16,29 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   }
 
   const role = (session.user.role ?? "").toLowerCase();
-  const where = role === "viewer" ? { id: params.id, ownerId: session.user.id } : { id: params.id };
-
-  const item = await prisma.inventoryItem.findFirst({
-    where,
-    select: {
-      id: true,
-      updatedAt: true,
-      extraData: true
-    }
-  });
+  const ownerSql = role === "viewer" ? Prisma.sql`AND "ownerId" = ${session.user.id}` : Prisma.empty;
+  type ThumbnailRow = { id: string; updatedAt: Date; photos: unknown };
+  const rows = await prisma.$queryRaw<ThumbnailRow[]>(Prisma.sql`
+    SELECT
+      id,
+      "updatedAt",
+      CASE
+        WHEN jsonb_typeof("extraData"->'photos') = 'array'
+          THEN "extraData"->'photos'->0
+        ELSE NULL
+      END AS photos
+    FROM "InventoryItem"
+    WHERE id = ${params.id}
+    ${ownerSql}
+    LIMIT 1
+  `);
+  const item = rows[0] ?? null;
 
   if (!item) {
     return NextResponse.json({ error: "Item no encontrado" }, { status: 404 });
   }
 
-  const photos = sanitizePhotosArray((item.extraData as any)?.photos, Math.min(1, MAX_ITEM_PHOTOS));
+  const photos = sanitizePhotosArray(item.photos, Math.min(1, MAX_ITEM_PHOTOS));
   const primaryPhoto = photos[0];
 
   if (!primaryPhoto) {

@@ -250,7 +250,7 @@ const MAX_PHOTOS = MAX_ITEM_PHOTOS;
 const MAX_PHOTO_DIMENSION = 2400; // ancho/alto maximo al comprimir
 const PHOTO_QUALITY = 0.94; // calidad JPEG/WEBP al recomprimir
 const drawingColors = ["#f87171", "#facc15", "#4ade80", "#38bdf8", "#f472b6", "#ffffff"];
-const THUMBNAILS_ENABLED = true;
+const THUMBNAILS_ENABLED = false;
 const NOTIFICATIONS_PAGE_SIZE = 10;
 const NOTIFICATIONS_POLL_INTERVAL_MS = 20_000;
 const TABLE_OVERSCAN_ROWS = 8;
@@ -264,7 +264,7 @@ const INVENTORY_REALTIME_REFRESH_INTERVAL_MS = 90_000;
 const LOCAL_ESTATUS_OVERRIDE_TTL_MS = 45_000;
 const INVENTORY_LOADING_INDICATOR_DELAY_MS = 180;
 const MANUAL_SKU_NUMBER_PADDING = 5;
-const HYBRID_LOCAL_AUTOLOAD_DELAY_MS = 350;
+const HYBRID_LOCAL_AUTOLOAD_DELAY_MS = 1800;
 
 const makePhotoKey = (file: File) => `${file.name}-${file.size}-${file.lastModified}`;
 
@@ -610,7 +610,14 @@ const toUpper = (value: string) => {
 const sanitizePhotos = (value: any) => {
   if (!Array.isArray(value)) return [];
   return value
-    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .map((entry) => {
+      if (typeof entry === "string") return entry.trim();
+      if (entry && typeof entry === "object") {
+        const candidate = entry.url ?? entry.dataUrl ?? entry.src ?? entry.preview ?? entry.source;
+        return typeof candidate === "string" ? candidate.trim() : "";
+      }
+      return "";
+    })
     .filter((entry) => entry.length)
     .slice(0, MAX_PHOTOS);
 };
@@ -2497,6 +2504,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
         }
         const existing = sanitizePhotos(data.photos);
         setModalPhotos(existing);
+        if (!existing.length && data.error) {
+          setPhotoModalError(data.error);
+        }
       } catch (err: any) {
         setPhotoModalError(err?.message || "No se pudieron obtener las fotos");
       } finally {
@@ -8437,7 +8447,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                       </div>
                     </>
                   ) : (
-                    <p className="text-xs text-slate-400">Sin fotos para este registro.</p>
+                    <p className="text-xs text-slate-400">
+                      {photoModalError || "Sin fotos para este registro."}
+                    </p>
                   )}
                 </div>
                 <div className="space-y-3">

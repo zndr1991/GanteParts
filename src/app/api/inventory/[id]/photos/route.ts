@@ -5,11 +5,11 @@ import { MAX_ITEM_PHOTOS, sanitizePhotosArray } from "@/lib/inventory-serializat
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
-const INVENTORY_ITEM_PHOTOS_TIMEOUT_MS_ENV = Number(process.env.INVENTORY_ITEM_PHOTOS_TIMEOUT_MS ?? "1800");
+const INVENTORY_ITEM_PHOTOS_TIMEOUT_MS_ENV = Number(process.env.INVENTORY_ITEM_PHOTOS_TIMEOUT_MS ?? "12000");
 const INVENTORY_ITEM_PHOTOS_TIMEOUT_MS =
   Number.isFinite(INVENTORY_ITEM_PHOTOS_TIMEOUT_MS_ENV) && INVENTORY_ITEM_PHOTOS_TIMEOUT_MS_ENV > 0
-    ? Math.min(INVENTORY_ITEM_PHOTOS_TIMEOUT_MS_ENV, 8000)
-    : 1800;
+    ? Math.min(INVENTORY_ITEM_PHOTOS_TIMEOUT_MS_ENV, 20000)
+    : 12000;
 const INVENTORY_ITEM_PHOTOS_CACHE_TTL_MS = 60_000;
 
 type ItemPhotosCacheEntry = {
@@ -94,8 +94,8 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     );
     item = rows[0] ?? null;
   } catch (error) {
-    console.error("[inventory-photos] fallback", error);
-    return NextResponse.json({ photos: [] });
+    console.error("[inventory-photos] query failed", error);
+    return NextResponse.json({ error: "No se pudieron obtener las fotos" }, { status: 504 });
   }
 
   if (!item) {
