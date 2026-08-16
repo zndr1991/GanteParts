@@ -4656,7 +4656,6 @@ export function InventoryClient({
       normalizedPrestadoDebtorFilters.length > 0;
     const shouldIncludeMeta =
       inventoryPage === 1 &&
-      initialPage.items.length > 0 &&
       effectiveServerSearchTerm.length === 0 &&
       !normalizedStatusFilter &&
       !hasAnyFacetFilterActive;
