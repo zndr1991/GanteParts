@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 import { auth } from "@/lib/auth";
+import { materializeInventoryPhotos } from "@/lib/inventory-photos";
 import { prisma } from "@/lib/prisma";
 import { activateItem, pauseItem, syncItemPhotosToMercadoLibre } from "@/lib/mercadolibre";
 import { MAX_ITEM_PHOTOS, sanitizePhotosArray, serializeInventoryItem } from "@/lib/inventory-serialization";
@@ -1023,13 +1024,27 @@ export async function GET(req: Request) {
 
     const shouldUseFastCount = !includeMeta;
 
-    const [items, countRows, statusTotals, facetOptions] = await Promise.all([
-      prisma.inventoryItem.findMany({
-        where,
-        orderBy: { updatedAt: "desc" },
-        skip,
-        take: shouldUseFastCount ? pageSize + 1 : pageSize
-      }),
+    const [dataRows, countRows, statusTotals, facetOptions] = await Promise.all([
+      prisma.$queryRaw<InventoryListRow[]>(Prisma.sql`
+        SELECT
+          "id", "skuInternal", "sellerCustomField", "title", "price", "stock",
+          "status", "mlItemId",
+          ("extraData" - 'photos') AS "extraData",
+          COALESCE(
+            CASE
+              WHEN jsonb_typeof("extraData"->'photos') = 'array' THEN jsonb_array_length("extraData"->'photos')
+              ELSE 0
+            END,
+            0
+          )::int AS "photoCount",
+          "createdAt", "updatedAt"
+        FROM "InventoryItem"
+        WHERE 1=1
+        ${ownerSql}
+        ORDER BY "updatedAt" DESC
+        OFFSET ${skip}
+        LIMIT ${shouldUseFastCount ? pageSize + 1 : pageSize}
+      `),
       shouldUseFastCount
         ? Promise.resolve<CountRow[]>([])
         : prisma.$queryRaw<CountRow[]>(Prisma.sql`
@@ -1055,15 +1070,19 @@ export async function GET(req: Request) {
         : Promise.resolve<InventoryFacetOptions | null>(null)
     ]);
 
-    const hasMoreFastRows = shouldUseFastCount && items.length > pageSize;
-    const visibleItems = hasMoreFastRows ? items.slice(0, pageSize) : items;
+    const hasMoreFastRows = shouldUseFastCount && dataRows.length > pageSize;
+    const visibleRows = hasMoreFastRows ? dataRows.slice(0, pageSize) : dataRows;
     const total = shouldUseFastCount
       ? hasMoreFastRows
         ? skip + pageSize + 1
-        : skip + visibleItems.length
+        : skip + visibleRows.length
       : Number(countRows[0]?.count ?? 0);
 
-    const serialized = visibleItems.map((item) => serializeInventoryItem(item));
+    const serialized = visibleRows.map((rawRow) => {
+      const result = serializeInventoryItem(rawRow);
+      result.photoCount = Number(rawRow.photoCount ?? 0);
+      return result;
+    });
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
     return NextResponse.json({
@@ -1125,13 +1144,39 @@ export async function POST(req: Request) {
       }
     });
 
+    let itemForResponse = item;
+    try {
+      const incomingPhotos = sanitizePhotosArray((item.extraData as any)?.photos, MAX_ITEM_PHOTOS);
+      if (incomingPhotos.length) {
+        const materialized = await materializeInventoryPhotos(item.id, incomingPhotos, { limit: MAX_ITEM_PHOTOS });
+        const changed =
+          materialized.length !== incomingPhotos.length ||
+          materialized.some((entry, index) => entry !== incomingPhotos[index]);
+
+        if (changed) {
+          const nextExtra =
+            item.extraData && typeof item.extraData === "object" && !Array.isArray(item.extraData)
+              ? { ...(item.extraData as Record<string, unknown>) }
+              : {};
+          nextExtra.photos = materialized;
+
+          itemForResponse = await prisma.inventoryItem.update({
+            where: { id: item.id },
+            data: { extraData: nextExtra as Prisma.InputJsonValue }
+          });
+        }
+      }
+    } catch (photoMaterializeError) {
+      console.error("[inventory:create] photo materialize failed", photoMaterializeError);
+    }
+
     // El fallo al escribir el log nunca debe romper la creacion del item
     try {
       await prisma.auditLog.create({
         data: {
           action: "inventory:create",
           userId: session.user.id,
-          itemId: item.id,
+          itemId: itemForResponse.id,
           metadata: { skuInternal: normalizedSku }
         }
       });
@@ -1143,7 +1188,7 @@ export async function POST(req: Request) {
     invalidateStatusTotalsCache();
     invalidateInteractiveSearchCache();
 
-    return NextResponse.json(serializeInventoryItem(item, { includePhotos: true }), { status: 201 });
+    return NextResponse.json(serializeInventoryItem(itemForResponse, { includePhotos: true }), { status: 201 });
   } catch (err: any) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
       return NextResponse.json({ error: GLOBAL_DUPLICATE_SKU_ERROR }, { status: 409 });
@@ -1372,7 +1417,12 @@ export async function PATCH(req: Request) {
       .filter((photo) => photo.length)
       .slice(0, MAX_ITEM_PHOTOS);
     if (sanitized.length) {
-      nextExtra.photos = sanitized;
+      try {
+        nextExtra.photos = await materializeInventoryPhotos(id, sanitized, { limit: MAX_ITEM_PHOTOS });
+      } catch (photoMaterializeError) {
+        console.error("[inventory:update] photo materialize failed", photoMaterializeError);
+        nextExtra.photos = sanitized;
+      }
     } else {
       delete nextExtra.photos;
     }

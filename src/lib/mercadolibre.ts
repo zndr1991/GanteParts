@@ -1,4 +1,12 @@
 import type { MercadoLibreAccount } from "@prisma/client";
+import { readFile } from "fs/promises";
+import path from "path";
+
+import {
+  isInventoryLocalUploadPath,
+  normalizeInventoryPhotoSource,
+  resolveInventoryLocalUploadAbsolutePath
+} from "./inventory-photos";
 import { prisma } from "./prisma";
 import { MAX_ITEM_PHOTOS, sanitizePhotosArray } from "./inventory-serialization";
 
@@ -158,10 +166,20 @@ const parseImageDataUrl = (dataUrl: string, index: number) => {
   };
 };
 
-async function uploadPictureDataUrlToMercadoLibre(token: string, dataUrl: string, index: number) {
-  const parsed = parseImageDataUrl(dataUrl, index);
+const inferMimeTypeFromFilePath = (filePath: string) => {
+  const extension = path.extname(filePath).toLowerCase();
+  if (extension === ".png") return "image/png";
+  if (extension === ".webp") return "image/webp";
+  if (extension === ".gif") return "image/gif";
+  if (extension === ".bmp") return "image/bmp";
+  if (extension === ".avif") return "image/avif";
+  if (extension === ".svg") return "image/svg+xml";
+  return "image/jpeg";
+};
+
+async function uploadPictureBinaryToMercadoLibre(token: string, binary: Buffer, mimeType: string, fileName: string, index: number) {
   const formData = new FormData();
-  formData.append("file", new Blob([parsed.binary], { type: parsed.mimeType }), parsed.fileName);
+  formData.append("file", new Blob([binary], { type: mimeType }), fileName);
 
   const response = await fetch(`${API_BASE}/pictures/items/upload`, {
     method: "POST",
@@ -185,6 +203,27 @@ async function uploadPictureDataUrlToMercadoLibre(token: string, dataUrl: string
   }
 
   return source;
+}
+
+async function uploadPictureDataUrlToMercadoLibre(token: string, dataUrl: string, index: number) {
+  const parsed = parseImageDataUrl(dataUrl, index);
+  return uploadPictureBinaryToMercadoLibre(token, parsed.binary, parsed.mimeType, parsed.fileName, index);
+}
+
+async function uploadLocalInventoryPhotoToMercadoLibre(token: string, itemId: string, source: string, index: number) {
+  const absolutePath = resolveInventoryLocalUploadAbsolutePath(itemId, source);
+  if (!absolutePath) {
+    throw new Error(`Ruta local de foto invalida para ML en posicion ${index + 1}`);
+  }
+
+  const binary = await readFile(absolutePath);
+  if (!binary.length) {
+    throw new Error(`Foto local vacia para ML en posicion ${index + 1}`);
+  }
+
+  const mimeType = inferMimeTypeFromFilePath(absolutePath);
+  const fileName = path.basename(absolutePath) || `inventory-photo-${index + 1}.jpg`;
+  return uploadPictureBinaryToMercadoLibre(token, binary, mimeType, fileName, index);
 }
 
 export const extractMercadoLibrePictureUrls = (snapshot: any, limit = MAX_ITEM_PHOTOS) => {
@@ -240,12 +279,18 @@ export async function syncItemPhotosToMercadoLibre(params: {
   let reusedHttpSources = 0;
 
   for (let index = 0; index < normalizedLocalPhotos.length; index += 1) {
-    const photo = normalizedLocalPhotos[index];
+    const photo = normalizeInventoryPhotoSource(normalizedLocalPhotos[index]);
 
     const asHttp = normalizeHttpUrl(photo);
     if (asHttp) {
       sourcesToSend.push(asHttp);
       reusedHttpSources += 1;
+      continue;
+    }
+
+    if (isInventoryLocalUploadPath(photo)) {
+      const uploadedSource = await uploadLocalInventoryPhotoToMercadoLibre(token, params.itemId, photo, index);
+      sourcesToSend.push(uploadedSource);
       continue;
     }
 

@@ -1,4 +1,5 @@
 import { auth } from "@/lib/auth";
+import { isInventoryLocalUploadPath, normalizeInventoryPhotoSource, toInventoryPhotoClientSrc } from "@/lib/inventory-photos";
 import { MAX_ITEM_PHOTOS, sanitizePhotosArray } from "@/lib/inventory-serialization";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
@@ -36,6 +37,8 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     return NextResponse.json({ error: "Item sin fotos" }, { status: 404 });
   }
 
+  const normalizedSource = normalizeInventoryPhotoSource(primaryPhoto);
+
   const etag = `"${item.id}:${new Date(item.updatedAt).getTime()}"`;
   if (req.headers.get("if-none-match") === etag) {
     return new NextResponse(null, {
@@ -47,15 +50,19 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     });
   }
 
-  if (primaryPhoto.startsWith("http://") || primaryPhoto.startsWith("https://")) {
-    return NextResponse.redirect(primaryPhoto, 307);
+  if (normalizedSource.startsWith("http://") || normalizedSource.startsWith("https://")) {
+    return NextResponse.redirect(normalizedSource, 307);
   }
 
-  if (primaryPhoto.startsWith("/")) {
-    return NextResponse.redirect(new URL(primaryPhoto, req.url), 307);
+  if (isInventoryLocalUploadPath(normalizedSource)) {
+    return NextResponse.redirect(new URL(toInventoryPhotoClientSrc(item.id, normalizedSource), req.url), 307);
   }
 
-  const dataMatch = primaryPhoto.match(DATA_IMAGE_PATTERN);
+  if (normalizedSource.startsWith("/")) {
+    return NextResponse.redirect(new URL(normalizedSource, req.url), 307);
+  }
+
+  const dataMatch = normalizedSource.match(DATA_IMAGE_PATTERN);
   if (!dataMatch) {
     return NextResponse.json({ error: "Formato de imagen no soportado" }, { status: 415 });
   }
