@@ -7,23 +7,6 @@ import { InventoryClient } from "../client";
 import type { InventoryClientItem, InventoryInitialPage } from "../client";
 import { getInventorySnapshot } from "@/lib/inventory-cache";
 
-const DEFAULT_INITIAL_PAGE_SIZE = 40;
-const MAX_INITIAL_PAGE_SIZE = 5000;
-const INVENTORY_FULL_PAGE_SIZE_ENV = Number(
-  process.env.INVENTORY_INITIAL_LOAD_LIMIT ??
-    process.env.INVENTORY_FULL_LOAD_LIMIT ??
-    `${DEFAULT_INITIAL_PAGE_SIZE}`
-);
-const INVENTORY_FULL_PAGE_SIZE =
-  Number.isFinite(INVENTORY_FULL_PAGE_SIZE_ENV) && INVENTORY_FULL_PAGE_SIZE_ENV > 0
-    ? Math.min(Math.floor(INVENTORY_FULL_PAGE_SIZE_ENV), MAX_INITIAL_PAGE_SIZE)
-    : DEFAULT_INITIAL_PAGE_SIZE;
-
-const hasPrestadoStatus = (item: InventoryClientItem) => {
-  const status = (item.extraData?.estatus_interno ?? "").toString().trim().toUpperCase();
-  return status === "PRESTADO";
-};
-
 export default async function PrestadasInventoryPage() {
   const session = await auth();
   if (!session?.user?.id) {
@@ -32,17 +15,15 @@ export default async function PrestadasInventoryPage() {
 
   const role = (session.user.role ?? "").toLowerCase();
   const ownerId = role === "viewer" ? session.user.id : null;
-  const { items, statusTotals } = await getInventorySnapshot(ownerId, INVENTORY_FULL_PAGE_SIZE);
+  const { items, total, statusTotals, complete } = await getInventorySnapshot(ownerId);
   const plainItems = items as InventoryClientItem[];
-  const prestadasItems = plainItems.filter(hasPrestadoStatus);
-  const totalPrestadas = typeof statusTotals?.PRESTADO === "number" ? statusTotals.PRESTADO : prestadasItems.length;
-  const initialPageSize = prestadasItems.length || INVENTORY_FULL_PAGE_SIZE;
+  const initialPageSize = plainItems.length || 1;
 
   const initialPage: InventoryInitialPage = {
-    items: prestadasItems,
+    items: plainItems,
     page: 1,
     pageSize: initialPageSize,
-    total: totalPrestadas,
+    total,
     statusTotals
   };
 
@@ -51,6 +32,7 @@ export default async function PrestadasInventoryPage() {
       initialPage={initialPage}
       userRole={session.user.role ?? "operator"}
       initialStatusFilter="PRESTADO"
+      initialDatasetComplete={complete}
     />
   );
 }

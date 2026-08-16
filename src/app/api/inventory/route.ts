@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 import { auth } from "@/lib/auth";
 import { materializeInventoryPhotos, toInventoryPhotoClientSrc } from "@/lib/inventory-photos";
+import { invalidateInventoryFullSnapshot } from "@/lib/inventory-full-snapshot";
 import { prisma } from "@/lib/prisma";
 import { activateItem, pauseItem, syncItemPhotosToMercadoLibre } from "@/lib/mercadolibre";
 import { MAX_ITEM_PHOTOS, sanitizePhotosArray, serializeInventoryItem } from "@/lib/inventory-serialization";
@@ -45,6 +46,7 @@ const findInventoryItemBySkuGlobal = async (normalizedSku: string, excludeId?: s
 
 const revalidateInventorySnapshotCache = () => {
   revalidateTag("inventory-initial");
+  invalidateInventoryFullSnapshot();
 };
 
 const payloadSchema = z.object({

@@ -1,8 +1,7 @@
 import { unstable_cache } from "next/cache";
 import type { InventoryClientItem } from "@/app/inventory/client";
-import { prisma } from "@/lib/prisma";
+import { getInventoryFullSnapshot } from "@/lib/inventory-full-snapshot";
 import { serializeInventoryItem } from "@/lib/inventory-serialization";
-import { Prisma } from "@prisma/client";
 import { fetchInventoryItemsSafely } from "@/lib/inventory-safe-load";
 
 const INVENTORY_PAGE_SIZE = 40;
@@ -25,63 +24,17 @@ const resolveRequestedTake = (take: number) => {
   return Number.isFinite(take) && take > 0 ? Math.floor(take) : MAX_CACHE_TAKE;
 };
 
-type StatusCountRow = {
-  label: string | null;
-  count: number | bigint | string;
+export const getInventorySnapshot = async (ownerId: string | null, _take?: number) => {
+  const snapshot = await getInventoryFullSnapshot(ownerId);
+  return {
+    items: snapshot.items as InventoryClientItem[],
+    total: snapshot.total,
+    statusTotals: snapshot.statusTotals,
+    skippedCount: snapshot.skippedCount,
+    complete: snapshot.complete,
+    truncated: snapshot.truncated
+  };
 };
-
-const getStatusTotals = async (ownerId: string | null) => {
-  const whereSql = ownerId ? Prisma.sql`WHERE "ownerId" = ${ownerId}` : Prisma.empty;
-  const rows = await prisma.$queryRaw<StatusCountRow[]>(Prisma.sql`
-    SELECT
-      COALESCE(NULLIF(UPPER(TRIM("extraData"->>'estatus_interno')), ''), 'SIN ESTATUS') AS label,
-      COUNT(*) AS count
-    FROM "InventoryItem"
-    ${whereSql}
-    GROUP BY 1
-  `);
-
-  const totals: Record<string, number> = {};
-  rows.forEach((row) => {
-    const key = (row.label ?? "").toString().trim().toUpperCase() || "SIN ESTATUS";
-    const parsedCount = Number(row.count ?? 0);
-    if (!Number.isFinite(parsedCount) || parsedCount <= 0) return;
-    totals[key] = Math.round(parsedCount);
-  });
-
-  return totals;
-};
-
-const fetchInventorySnapshot = unstable_cache(
-  async (ownerId: string | null, take: number) => {
-    const where = resolveSnapshotWhere(ownerId);
-    const requested = resolveRequestedTake(take);
-
-    const [total, statusTotals, safeItems] = await Promise.all([
-      prisma.inventoryItem.count({ where }),
-      getStatusTotals(ownerId),
-      fetchInventoryItemsSafely({
-        where,
-        take: requested
-      })
-    ]);
-
-    const { items, skippedIds } = safeItems;
-
-    if (skippedIds.length) {
-      console.error(`Inventory snapshot omitio ${skippedIds.length} registros con texto invalido`);
-    }
-
-    return {
-      items: items.map((item) => serializeInventoryItem(item) as InventoryClientItem),
-      total,
-      statusTotals,
-      skippedCount: skippedIds.length
-    };
-  },
-  ["inventory-initial"],
-  { revalidate: 45, tags: ["inventory-initial"] }
-);
 
 const fetchManualInventorySnapshot = unstable_cache(
   async (ownerId: string | null, take: number) => {
@@ -105,10 +58,6 @@ const fetchManualInventorySnapshot = unstable_cache(
   ["inventory-manual-initial"],
   { revalidate: 45, tags: ["inventory-initial"] }
 );
-
-export const getInventorySnapshot = async (ownerId: string | null, take: number) => {
-  return fetchInventorySnapshot(ownerId ?? null, take);
-};
 
 export const getManualInventorySnapshot = async (ownerId: string | null, take: number) => {
   return fetchManualInventorySnapshot(ownerId ?? null, take);

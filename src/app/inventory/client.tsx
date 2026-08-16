@@ -147,6 +147,7 @@ type InventoryClientProps = {
   userRole: string;
   mode?: "full" | "manual-only";
   initialStatusFilter?: string | null;
+  initialDatasetComplete?: boolean;
 };
 
 type PhotoEditorTarget =
@@ -264,7 +265,7 @@ const INVENTORY_REALTIME_REFRESH_INTERVAL_MS = 90_000;
 const LOCAL_ESTATUS_OVERRIDE_TTL_MS = 45_000;
 const INVENTORY_LOADING_INDICATOR_DELAY_MS = 180;
 const MANUAL_SKU_NUMBER_PADDING = 5;
-const HYBRID_LOCAL_AUTOLOAD_DELAY_MS = 1800;
+const HYBRID_LOCAL_AUTOLOAD_DELAY_MS = 0;
 
 const makePhotoKey = (file: File) => `${file.name}-${file.size}-${file.lastModified}`;
 
@@ -962,7 +963,13 @@ function InternalMenuIcon({ icon }: { icon: InternalMenuIconName }) {
   }
 }
 
-export function InventoryClient({ initialPage, userRole, mode = "full", initialStatusFilter = null }: InventoryClientProps) {
+export function InventoryClient({
+  initialPage,
+  userRole,
+  mode = "full",
+  initialStatusFilter = null,
+  initialDatasetComplete = false
+}: InventoryClientProps) {
   const pathname = usePathname();
   const isManualOnly = mode === "manual-only";
   const normalizedInitialStatusFilter = initialStatusFilter?.trim().toUpperCase() || null;
@@ -1090,7 +1097,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   const inventoryRequestAbortRef = useRef<AbortController | null>(null);
   const hybridLoadAbortRef = useRef<AbortController | null>(null);
   const hybridAutoloadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const hybridAutoAttemptedRef = useRef(false);
+  const hybridAutoAttemptedRef = useRef(!isManualOnly && initialDatasetComplete);
   const loadingPageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastServerFilterRequestSignatureRef = useRef<string | null>(null);
   const inventoryPageCacheRef = useRef<Map<string, { expiresAt: number; payload: InventoryPageCachePayload }>>(
@@ -1131,7 +1138,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   );
   const [workerSearchResult, setWorkerSearchResult] = useState<{ query: string; ids: string[] } | null>(null);
   const [workerSearching, setWorkerSearching] = useState(false);
-  const [hybridLocalMode, setHybridLocalMode] = useState(false);
+  const [hybridLocalMode, setHybridLocalMode] = useState(!isManualOnly && initialDatasetComplete);
   const [hybridLocalHydrating, setHybridLocalHydrating] = useState(false);
   const [loadingPage, setLoadingPage] = useState(false);
   const [inventoryRefreshing, setInventoryRefreshing] = useState(false);
@@ -1440,7 +1447,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   ]);
 
   useEffect(() => {
-    if (isManualOnly) return;
+    if (isManualOnly || hybridLocalMode) return;
     const controller = new AbortController();
     const timeout = setTimeout(() => {
       void fetch("/api/inventory?page=1&pageSize=1&includeMeta=0", {
@@ -1455,7 +1462,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
       clearTimeout(timeout);
       controller.abort();
     };
-  }, [isManualOnly]);
+  }, [hybridLocalMode, isManualOnly]);
 
   const downloadTemplate = async () => {
     setDownloading(true);
@@ -4417,7 +4424,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
 
     if (canUseWorkerSearch) {
       if (!workerSearchResult || workerSearchResult.query !== normalizedSearch) {
-        return [];
+        return fallbackSearchFilteredItems;
       }
 
       return workerSearchResult.ids

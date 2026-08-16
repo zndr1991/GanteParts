@@ -19,6 +19,12 @@ export function PanelRoutePrefetch({ routes }: PanelRoutePrefetchProps) {
       routes.forEach((route) => {
         router.prefetch(route);
       });
+
+      if (routes.some((route) => route === "/inventory" || route.startsWith("/inventory/"))) {
+        void fetch("/api/inventory/all", { cache: "no-store", credentials: "same-origin" }).catch(() => {
+          // Prefetch best-effort: si falla, /inventory igual hidrata al entrar.
+        });
+      }
     };
 
     const requestIdle = (window as Window & {

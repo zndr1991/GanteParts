@@ -1,8 +1,10 @@
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 import { auth } from "@/lib/auth";
+import { invalidateInventoryFullSnapshot } from "@/lib/inventory-full-snapshot";
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
+import { revalidateTag } from "next/cache";
 import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 
@@ -238,6 +240,9 @@ export async function POST(req: Request) {
       }
     }
   });
+
+  revalidateTag("inventory-initial");
+  invalidateInventoryFullSnapshot();
 
   return NextResponse.json({ inserted: result.count, errors: errors.slice(0, 25) });
 }

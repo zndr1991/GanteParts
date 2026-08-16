@@ -5,6 +5,7 @@ import { createHmac, timingSafeEqual } from "crypto";
 import { revalidateTag } from "next/cache";
 
 import { extractMercadoLibrePictureUrls, fetchItemSnapshotByMlUserId, getMercadoLibreAccountByMlUserId } from "@/lib/mercadolibre";
+import { invalidateInventoryFullSnapshot } from "@/lib/inventory-full-snapshot";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 
@@ -540,6 +541,7 @@ export async function POST(req: Request) {
 
     if (updatedCount > 0) {
       revalidateTag("inventory-initial");
+      invalidateInventoryFullSnapshot();
     }
 
     return NextResponse.json({
