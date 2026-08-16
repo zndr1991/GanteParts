@@ -1098,6 +1098,7 @@ export function InventoryClient({
   const hybridLoadAbortRef = useRef<AbortController | null>(null);
   const hybridAutoloadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hybridAutoAttemptedRef = useRef(!isManualOnly && initialDatasetComplete);
+  const hasSkippedInitialServerFetchRef = useRef(false);
   const loadingPageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastServerFilterRequestSignatureRef = useRef<string | null>(null);
   const inventoryPageCacheRef = useRef<Map<string, { expiresAt: number; payload: InventoryPageCachePayload }>>(
@@ -1165,7 +1166,7 @@ export function InventoryClient({
   const isFinanzasMenuActive = pathname.startsWith("/finanzas");
   const isManualMenuActive = pathname.startsWith("/inventory/manual");
   const thumbnailsActive = THUMBNAILS_ENABLED;
-  const canAutoEnableHybridLocal = !isManualOnly;
+  const canAutoEnableHybridLocal = false;
   const useServerPagination = !isManualOnly && !hybridLocalMode;
 
   useEffect(() => {
@@ -1445,24 +1446,6 @@ export function InventoryClient({
     updatingIds.length,
     useServerPagination
   ]);
-
-  useEffect(() => {
-    if (isManualOnly || hybridLocalMode) return;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => {
-      void fetch("/api/inventory?page=1&pageSize=1&includeMeta=0", {
-        cache: "no-store",
-        signal: controller.signal
-      }).catch(() => {
-        // Warm-up best-effort: ignorar fallos de red o permisos de sesión.
-      });
-    }, 220);
-
-    return () => {
-      clearTimeout(timeout);
-      controller.abort();
-    };
-  }, [hybridLocalMode, isManualOnly]);
 
   const downloadTemplate = async () => {
     setDownloading(true);
@@ -4645,6 +4628,25 @@ export function InventoryClient({
       return;
     }
 
+    if (!hasSkippedInitialServerFetchRef.current) {
+      hasSkippedInitialServerFetchRef.current = true;
+      const hasInitialFilters =
+        effectiveServerSearchTerm.length > 0 ||
+        Boolean(normalizedStatusFilter) ||
+        normalizedInventoryMarcaFilter.length > 0 ||
+        normalizedInventoryCocheFilter.length > 0 ||
+        normalizedInventoryPiezaFilter.length > 0 ||
+        normalizedPrestadoDebtorFilters.length > 0;
+      const shouldSkipInitialFetch =
+        inventoryReloadSeq === 0 &&
+        inventoryPage === 1 &&
+        !hasInitialFilters &&
+        initialPage.items.length > 0;
+      if (shouldSkipInitialFetch) {
+        return;
+      }
+    }
+
     lastServerFilterRequestSignatureRef.current = requestFilterSignature;
 
     const hasAnyFacetFilterActive =
@@ -4652,13 +4654,9 @@ export function InventoryClient({
       normalizedInventoryCocheFilter.length > 0 ||
       normalizedInventoryPiezaFilter.length > 0 ||
       normalizedPrestadoDebtorFilters.length > 0;
-    const shouldIncludeMeta =
-      inventoryPage === 1 &&
-      effectiveServerSearchTerm.length === 0 &&
-      !normalizedStatusFilter &&
-      !hasAnyFacetFilterActive;
+    const shouldIncludeMeta = true;
     const shouldIncludeFacetOptions =
-      shouldIncludeMeta &&
+      inventoryPage === 1 &&
       effectiveServerSearchTerm.length === 0 &&
       !normalizedStatusFilter &&
       !hasAnyFacetFilterActive;
@@ -4685,6 +4683,7 @@ export function InventoryClient({
     normalizedInventoryPiezaFilter,
     normalizedPrestadoDebtorFilters,
     normalizedStatusFilter,
+    initialPage.items.length,
     inventoryRequestPageSize,
     search,
     hybridLocalHydrating,
