@@ -4654,9 +4654,14 @@ export function InventoryClient({
       normalizedInventoryCocheFilter.length > 0 ||
       normalizedInventoryPiezaFilter.length > 0 ||
       normalizedPrestadoDebtorFilters.length > 0;
-    const shouldIncludeMeta = true;
-    const shouldIncludeFacetOptions =
+    const shouldIncludeMeta =
       inventoryPage === 1 &&
+      initialPage.items.length > 0 &&
+      effectiveServerSearchTerm.length === 0 &&
+      !normalizedStatusFilter &&
+      !hasAnyFacetFilterActive;
+    const shouldIncludeFacetOptions =
+      shouldIncludeMeta &&
       effectiveServerSearchTerm.length === 0 &&
       !normalizedStatusFilter &&
       !hasAnyFacetFilterActive;

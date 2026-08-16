@@ -15,11 +15,11 @@ const MAX_CACHE_TAKE =
   Number.isFinite(INVENTORY_INITIAL_LOAD_ENV) && INVENTORY_INITIAL_LOAD_ENV > 0
     ? Math.min(Math.floor(INVENTORY_INITIAL_LOAD_ENV), MAX_INITIAL_PAGE_SIZE)
     : INVENTORY_PAGE_SIZE;
-const INVENTORY_SNAPSHOT_TIMEOUT_MS_ENV = Number(process.env.INVENTORY_SNAPSHOT_TIMEOUT_MS ?? "4500");
+const INVENTORY_SNAPSHOT_TIMEOUT_MS_ENV = Number(process.env.INVENTORY_SNAPSHOT_TIMEOUT_MS ?? "9000");
 const INVENTORY_SNAPSHOT_TIMEOUT_MS =
   Number.isFinite(INVENTORY_SNAPSHOT_TIMEOUT_MS_ENV) && INVENTORY_SNAPSHOT_TIMEOUT_MS_ENV > 0
     ? Math.min(INVENTORY_SNAPSHOT_TIMEOUT_MS_ENV, 12000)
-    : 4500;
+    : 9000;
 const INVENTORY_STALE_SNAPSHOT_MAX_AGE_MS = 10 * 60 * 1000;
 
 type InventorySnapshotResult = {
@@ -176,6 +176,63 @@ export const getInventorySnapshot = async (ownerId: string | null, take?: number
         complete: stale.complete,
         truncated: stale.truncated
       };
+    }
+
+    try {
+      const fallbackTake = Math.max(1, Math.min(requested, INVENTORY_PAGE_SIZE));
+      const fallbackRows = await loadLightweightInitialRows(ownerId, fallbackTake);
+      if (fallbackRows.length > 0) {
+        const payload: InventorySnapshotResult = {
+          items: fallbackRows,
+          total: fallbackRows.length,
+          statusTotals: buildStatusTotalsFromItems(fallbackRows),
+          skippedCount: 0,
+          complete: false,
+          truncated: true
+        };
+        lastInventorySnapshotByScope.set(scopeKey, {
+          ...payload,
+          updatedAt: Date.now()
+        });
+        console.warn("[inventory-cache] emergency lightweight fallback", {
+          scopeKey,
+          fallbackRows: fallbackRows.length
+        });
+        return payload;
+      }
+    } catch (fallbackError) {
+      console.error("[inventory-cache] emergency lightweight fallback failed", fallbackError);
+    }
+
+    try {
+      const fallbackTake = Math.max(1, Math.min(requested, INVENTORY_PAGE_SIZE));
+      const safeItems = await fetchInventoryItemsSafely({
+        where,
+        take: fallbackTake
+      });
+      const fallbackRows = safeItems.items.map((item) => serializeInventoryItem(item) as InventoryClientItem);
+      if (fallbackRows.length > 0) {
+        const payload: InventorySnapshotResult = {
+          items: fallbackRows,
+          total: fallbackRows.length,
+          statusTotals: buildStatusTotalsFromItems(fallbackRows),
+          skippedCount: safeItems.skippedIds.length,
+          complete: false,
+          truncated: true
+        };
+        lastInventorySnapshotByScope.set(scopeKey, {
+          ...payload,
+          updatedAt: Date.now()
+        });
+        console.warn("[inventory-cache] emergency safe fallback", {
+          scopeKey,
+          fallbackRows: fallbackRows.length,
+          skipped: safeItems.skippedIds.length
+        });
+        return payload;
+      }
+    } catch (safeFallbackError) {
+      console.error("[inventory-cache] emergency safe fallback failed", safeFallbackError);
     }
 
     console.error("[inventory-cache] snapshot fallback", error);
