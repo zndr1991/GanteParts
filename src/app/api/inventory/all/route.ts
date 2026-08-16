@@ -3,8 +3,9 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { toInventoryPhotoClientSrc } from "@/lib/inventory-photos";
 import { prisma } from "@/lib/prisma";
-import { serializeInventoryItem } from "@/lib/inventory-serialization";
+import { sanitizePhotosArray, serializeInventoryItem } from "@/lib/inventory-serialization";
 import { Prisma } from "@prisma/client";
 
 const DEFAULT_FULL_LOAD_LIMIT = 0;
@@ -30,6 +31,7 @@ type InventoryListRow = {
   stock: number | bigint;
   status: string;
   mlItemId: string | null;
+  photoPreview: unknown;
   extraData: any;
   photoCount: number | bigint;
   createdAt: Date;
@@ -82,6 +84,10 @@ export async function GET() {
     SELECT
       "id", "skuInternal", "sellerCustomField", "title", "price", "stock",
       "status", "mlItemId",
+      CASE
+        WHEN jsonb_typeof("extraData"->'photos') = 'array' THEN "extraData"->'photos'->0
+        ELSE NULL
+      END AS "photoPreview",
       ("extraData" - 'photos') AS "extraData",
       COALESCE(
         CASE
@@ -101,6 +107,8 @@ export async function GET() {
   const serialized = rows.map((rawRow) => {
     const result = serializeInventoryItem(rawRow);
     result.photoCount = Number(rawRow.photoCount ?? 0);
+    const previewSource = sanitizePhotosArray(rawRow.photoPreview, 1)[0] ?? null;
+    result.photoPreview = previewSource ? toInventoryPhotoClientSrc(rawRow.id, previewSource) : null;
     return result;
   });
 

@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 import { auth } from "@/lib/auth";
-import { materializeInventoryPhotos } from "@/lib/inventory-photos";
+import { materializeInventoryPhotos, toInventoryPhotoClientSrc } from "@/lib/inventory-photos";
 import { prisma } from "@/lib/prisma";
 import { activateItem, pauseItem, syncItemPhotosToMercadoLibre } from "@/lib/mercadolibre";
 import { MAX_ITEM_PHOTOS, sanitizePhotosArray, serializeInventoryItem } from "@/lib/inventory-serialization";
@@ -364,6 +364,7 @@ type InventoryListRow = {
   stock: number | bigint;
   status: string;
   mlItemId: string | null;
+  photoPreview: unknown;
   extraData: any;
   photoCount: number | bigint;
   createdAt: Date;
@@ -753,6 +754,10 @@ const loadInteractiveSearchSnapshot = async (ownerId: string | null) => {
     SELECT
       "id", "skuInternal", "sellerCustomField", "title", "price", "stock",
       "status", "mlItemId",
+      CASE
+        WHEN jsonb_typeof("extraData"->'photos') = 'array' THEN "extraData"->'photos'->0
+        ELSE NULL
+      END AS "photoPreview",
       ("extraData" - 'photos') AS "extraData",
       COALESCE(
         CASE
@@ -898,6 +903,8 @@ export async function GET(req: Request) {
       const serialized = visibleRows.map((rawRow) => {
         const result = serializeInventoryItem(rawRow);
         result.photoCount = Number(rawRow.photoCount ?? 0);
+        const previewSource = sanitizePhotosArray(rawRow.photoPreview, 1)[0] ?? null;
+        result.photoPreview = previewSource ? toInventoryPhotoClientSrc(rawRow.id, previewSource) : null;
         return result;
       });
       const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -937,6 +944,10 @@ export async function GET(req: Request) {
           SELECT
             "id", "skuInternal", "sellerCustomField", "title", "price", "stock",
             "status", "mlItemId",
+            CASE
+              WHEN jsonb_typeof("extraData"->'photos') = 'array' THEN "extraData"->'photos'->0
+              ELSE NULL
+            END AS "photoPreview",
             ("extraData" - 'photos') AS "extraData",
             COALESCE(
               CASE
@@ -1004,6 +1015,8 @@ export async function GET(req: Request) {
       const serialized = visibleRows.map((rawRow) => {
         const result = serializeInventoryItem(rawRow);
         result.photoCount = Number(rawRow.photoCount ?? 0);
+        const previewSource = sanitizePhotosArray(rawRow.photoPreview, 1)[0] ?? null;
+        result.photoPreview = previewSource ? toInventoryPhotoClientSrc(rawRow.id, previewSource) : null;
         return result;
       });
       const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -1027,6 +1040,10 @@ export async function GET(req: Request) {
         SELECT
           "id", "skuInternal", "sellerCustomField", "title", "price", "stock",
           "status", "mlItemId",
+          CASE
+            WHEN jsonb_typeof("extraData"->'photos') = 'array' THEN "extraData"->'photos'->0
+            ELSE NULL
+          END AS "photoPreview",
           ("extraData" - 'photos') AS "extraData",
           COALESCE(
             CASE
@@ -1079,6 +1096,8 @@ export async function GET(req: Request) {
     const serialized = visibleRows.map((rawRow) => {
       const result = serializeInventoryItem(rawRow);
       result.photoCount = Number(rawRow.photoCount ?? 0);
+      const previewSource = sanitizePhotosArray(rawRow.photoPreview, 1)[0] ?? null;
+      result.photoPreview = previewSource ? toInventoryPhotoClientSrc(rawRow.id, previewSource) : null;
       return result;
     });
     const totalPages = Math.max(1, Math.ceil(total / pageSize));

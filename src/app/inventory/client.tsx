@@ -250,7 +250,7 @@ const MAX_PHOTOS = MAX_ITEM_PHOTOS;
 const MAX_PHOTO_DIMENSION = 2400; // ancho/alto maximo al comprimir
 const PHOTO_QUALITY = 0.94; // calidad JPEG/WEBP al recomprimir
 const drawingColors = ["#f87171", "#facc15", "#4ade80", "#38bdf8", "#f472b6", "#ffffff"];
-const THUMBNAILS_ENABLED = false;
+const THUMBNAILS_ENABLED = true;
 const NOTIFICATIONS_PAGE_SIZE = 10;
 const NOTIFICATIONS_POLL_INTERVAL_MS = 20_000;
 const TABLE_OVERSCAN_ROWS = 8;
@@ -2528,11 +2528,14 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   }, []);
 
   const getThumbnailSrc = useCallback(
-    (itemId: string) => {
-      const version = thumbnailVersionById[itemId] ?? 0;
+    (item: Item) => {
+      const version = thumbnailVersionById[item.id] ?? 0;
+      if (version === 0 && item.photoPreview && item.photoPreview.trim().length) {
+        return item.photoPreview;
+      }
       return version > 0
-        ? `/api/inventory/${itemId}/thumbnail?v=${version}`
-        : `/api/inventory/${itemId}/thumbnail`;
+        ? `/api/inventory/${item.id}/thumbnail?v=${version}`
+        : `/api/inventory/${item.id}/thumbnail`;
     },
     [thumbnailVersionById]
   );
@@ -2645,7 +2648,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
       const nextPhotoCount = typeof data?.photoCount === "number" ? data.photoCount : photosToSave.length;
       setItems((curr) =>
         curr.map((item) =>
-          item.id === photoModal.id ? { ...item, photoCount: nextPhotoCount } : item
+          item.id === photoModal.id
+            ? { ...item, photoCount: nextPhotoCount, photoPreview: photosToSave[0] ?? null }
+            : item
         )
       );
       setThumbnailVersionById((prev) => ({ ...prev, [photoModal.id]: (prev[photoModal.id] ?? 0) + 1 }));
@@ -5259,9 +5264,59 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     inventoryPage
   ]);
 
+  const statusCounterBaseItems = useMemo(() => {
+    if (useServerPagination) {
+      return items;
+    }
+
+    return searchFilteredItems.filter((item) => {
+      const marcaValue = getInventoryFacetMarca(item);
+      const cocheValue = getInventoryFacetCoche(item);
+      const piezaValue = getInventoryFacetPieza(item);
+      const prestadoDebtorValue = getInventoryFacetPrestadoDebtor(item);
+
+      if (normalizedInventoryMarcaFilter && marcaValue !== normalizedInventoryMarcaFilter) return false;
+      if (normalizedInventoryCocheFilter && cocheValue !== normalizedInventoryCocheFilter) return false;
+      if (normalizedInventoryPiezaFilter && piezaValue !== normalizedInventoryPiezaFilter) return false;
+      if (
+        normalizedStatusFilter === "PRESTADO" &&
+        normalizedPrestadoDebtorFilterSet.size > 0 &&
+        !normalizedPrestadoDebtorFilterSet.has(prestadoDebtorValue)
+      ) {
+        return false;
+      }
+
+      if (mlSyncFilter === "synced") {
+        return isMlItemSynced(item);
+      }
+      if (mlSyncFilter === "notSynced") {
+        return hasMlCodeValue(item) && !isMlItemSynced(item);
+      }
+      if (mlSyncFilter === "missingOrInvalid") {
+        return isMissingOrInvalidMlCode(item);
+      }
+
+      return true;
+    });
+  }, [
+    getInventoryFacetCoche,
+    getInventoryFacetMarca,
+    getInventoryFacetPieza,
+    getInventoryFacetPrestadoDebtor,
+    items,
+    mlSyncFilter,
+    normalizedInventoryCocheFilter,
+    normalizedInventoryMarcaFilter,
+    normalizedInventoryPiezaFilter,
+    normalizedPrestadoDebtorFilterSet,
+    normalizedStatusFilter,
+    searchFilteredItems,
+    useServerPagination
+  ]);
+
   const statusCounters = useMemo(() => {
     const localCounts: Record<string, number> = {};
-    items.forEach((item) => {
+    statusCounterBaseItems.forEach((item) => {
       const key = normalizeStatusLabel(item.extraData?.estatus_interno);
       localCounts[key] = (localCounts[key] ?? 0) + 1;
     });
@@ -5274,7 +5329,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
       }
       return b[1] - a[1];
     });
-  }, [items, statusTotals, useServerPagination]);
+  }, [statusCounterBaseItems, statusTotals, useServerPagination]);
 
   const statusCounterMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -6178,7 +6233,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                             const extra = item.extraData ?? {};
                             const photosCount = typeof item.photoCount === "number" ? item.photoCount : 0;
                             const previewEnabled = thumbnailsActive && photosCount > 0;
-                            const previewSrc = previewEnabled ? getThumbnailSrc(item.id) : null;
+                            const previewSrc = previewEnabled ? getThumbnailSrc(item) : null;
                             return (
                               <article
                                 key={`manual-last-${item.id}`}
@@ -7113,7 +7168,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                 const isMlSyncBusy = mlSingleActivatingId === item.id;
                 const canActivateMl = canManageMercadoLibre && hasMlCode && !isMlSynced && !isMlSyncBusy;
                 const previewEnabled = thumbnailsActive && photosCount > 0;
-                const previewSrc = previewEnabled ? getThumbnailSrc(item.id) : null;
+                const previewSrc = previewEnabled ? getThumbnailSrc(item) : null;
                 const mlStatusReasonLabel = getMlStatusReasonLabel(extra, item.status);
 
                 return (
@@ -7509,7 +7564,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                     const mlUrl = item.mlItemId ? `https://articulo.mercadolibre.com.mx/${item.mlItemId}` : null;
                     const previewEnabled = thumbnailsActive && photosCount > 0;
                     const showDesktopPreview = previewEnabled && (!shouldVirtualizeDesktop || !isDesktopTableScrolling);
-                    const previewSrc = previewEnabled ? getThumbnailSrc(item.id) : null;
+                    const previewSrc = previewEnabled ? getThumbnailSrc(item) : null;
                     const mlStatusReasonLabel = getMlStatusReasonLabel(extra, item.status);
                     return (
                       <tr
