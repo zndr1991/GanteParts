@@ -259,8 +259,8 @@ const WORKER_SEARCH_MIN_ITEMS = 250;
 const INVENTORY_PAGE_BLOCK_SIZE_DEFAULT = 100;
 const INVENTORY_PAGE_BLOCK_SIZE_ALL_REQUEST = 5000;
 const MAX_INVENTORY_SEARCH_TOKENS = 4;
-const INVENTORY_PAGE_CACHE_TTL_MS = 4_000;
-const INVENTORY_REALTIME_REFRESH_INTERVAL_MS = 8_000;
+const INVENTORY_PAGE_CACHE_TTL_MS = 90_000;
+const INVENTORY_REALTIME_REFRESH_INTERVAL_MS = 90_000;
 const LOCAL_ESTATUS_OVERRIDE_TTL_MS = 45_000;
 const INVENTORY_LOADING_INDICATOR_DELAY_MS = 180;
 const MANUAL_SKU_NUMBER_PADDING = 5;
@@ -1151,8 +1151,8 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
   const isFinanzasMenuActive = pathname.startsWith("/finanzas");
   const isManualMenuActive = pathname.startsWith("/inventory/manual");
   const thumbnailsActive = THUMBNAILS_ENABLED;
-  const canAutoEnableHybridLocal = false;
-  const useServerPagination = !isManualOnly;
+  const canAutoEnableHybridLocal = !isManualOnly;
+  const useServerPagination = !isManualOnly && !hybridLocalMode;
 
   useEffect(() => {
     statusTotalsRef.current = statusTotals;
@@ -1741,7 +1741,9 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
     const requestController = new AbortController();
     hybridLoadAbortRef.current = requestController;
     setHybridLocalHydrating(true);
-    setInventoryRefreshing(true);
+    if (!hasRenderableRowsRef.current) {
+      setInventoryRefreshing(true);
+    }
     setMessage(null);
 
     try {
@@ -6520,10 +6522,10 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
                     Sync ML: {mlSyncFilter === "synced" ? "Sincronizadas" : mlSyncFilter === "notSynced" ? "No sincronizadas" : "Sin codigo o invalido"}
                   </p>
                 )}
-                {inventoryRefreshing && !loadingPage ? (
-                  <p className="mt-1 text-amber-300">Actualizando resultados...</p>
-                ) : hybridLocalMode ? (
+                {hybridLocalMode ? (
                   <p className="mt-1 text-emerald-300">Busqueda local instantanea activa</p>
+                ) : inventoryRefreshing && !loadingPage ? (
+                  <p className="mt-1 text-amber-300">Actualizando resultados...</p>
                 ) : (
                   <p className="mt-1 text-slate-500">Escribe y pulsa Aplicar filtros para buscar</p>
                 )}
@@ -6995,7 +6997,7 @@ export function InventoryClient({ initialPage, userRole, mode = "full", initialS
             </div>
           ) : (
             <>
-              {inventoryRefreshing && (
+              {inventoryRefreshing && !hybridLocalMode && (
                 <div className="mt-2 flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/50 px-3 py-2 text-xs text-amber-200">
                   <span className="h-2 w-2 animate-pulse rounded-full bg-amber-300" />
                   Actualizando inventario sin bloquear la tabla...

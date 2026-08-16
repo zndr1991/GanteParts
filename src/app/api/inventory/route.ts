@@ -12,7 +12,7 @@ import { z } from "zod";
 
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 5000;
-const STATUS_TOTALS_CACHE_TTL_MS = 12 * 1000;
+const STATUS_TOTALS_CACHE_TTL_MS = 90 * 1000;
 const MAX_SEARCH_TOKENS = 4;
 const ML_APP_STATUS_SYNC_AT_KEY = "ml_app_status_sync_at";
 const ML_APP_STATUS_SYNC_TO_KEY = "ml_app_status_sync_to";
@@ -432,7 +432,7 @@ const interactiveSearchInFlight = new Map<string, Promise<InteractiveSearchSnaps
 
 const statusTotalsCacheKey = (ownerId: string | null) => ownerId ?? "__ALL__";
 const interactiveSearchCacheKey = (ownerId: string | null) => ownerId ?? "__ALL__";
-const INTERACTIVE_SEARCH_CACHE_TTL_MS = 8 * 1000;
+const INTERACTIVE_SEARCH_CACHE_TTL_MS = 90 * 1000;
 
 const invalidateStatusTotalsCache = () => {
   statusTotalsCache.clear();
@@ -844,10 +844,8 @@ export async function GET(req: Request) {
     const codeSearchMode = Boolean(searchFilter && isLikelyCodeSearch(searchFilter, normalizedSearchToken));
 
     if (!includeMeta) {
-      const shouldBypassInteractiveSnapshotCache = Boolean(statusFilter) || Boolean(searchFilter);
-      let filtered = shouldBypassInteractiveSnapshotCache
-        ? await loadInteractiveSearchSnapshot(ownerId)
-        : await getInteractiveSearchSnapshot(ownerId);
+      const filteredSnapshot = await getInteractiveSearchSnapshot(ownerId);
+      let filtered = filteredSnapshot;
 
       if (searchFilter) {
         if (codeSearchMode) {

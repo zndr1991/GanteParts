@@ -6,7 +6,6 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { serializeInventoryItem } from "@/lib/inventory-serialization";
 import { Prisma } from "@prisma/client";
-import { fetchInventoryItemsSafely } from "@/lib/inventory-safe-load";
 
 const DEFAULT_FULL_LOAD_LIMIT = 0;
 const FULL_LOAD_LIMIT_ENV = Number(
@@ -20,6 +19,21 @@ const FULL_LOAD_LIMIT =
 type StatusCountRow = {
   label: string | null;
   count: number | bigint | string;
+};
+
+type InventoryListRow = {
+  id: string;
+  skuInternal: string;
+  sellerCustomField: string | null;
+  title: string | null;
+  price: any;
+  stock: number | bigint;
+  status: string;
+  mlItemId: string | null;
+  extraData: any;
+  photoCount: number | bigint;
+  createdAt: Date;
+  updatedAt: Date;
 };
 
 const getStatusTotals = async (ownerId: string | null) => {
@@ -61,22 +75,40 @@ export async function GET() {
   }
 
   const shouldTruncate = FULL_LOAD_LIMIT > 0 && total > FULL_LOAD_LIMIT;
-  const take = shouldTruncate ? FULL_LOAD_LIMIT : undefined;
+  const ownerSql = ownerId ? Prisma.sql`AND "ownerId" = ${ownerId}` : Prisma.empty;
+  const limitSql = shouldTruncate ? Prisma.sql`LIMIT ${FULL_LOAD_LIMIT}` : Prisma.empty;
 
-  const { items, skippedIds } = await fetchInventoryItemsSafely({
-    where,
-    take
+  const rows = await prisma.$queryRaw<InventoryListRow[]>(Prisma.sql`
+    SELECT
+      "id", "skuInternal", "sellerCustomField", "title", "price", "stock",
+      "status", "mlItemId",
+      ("extraData" - 'photos') AS "extraData",
+      COALESCE(
+        CASE
+          WHEN jsonb_typeof("extraData"->'photos') = 'array' THEN jsonb_array_length("extraData"->'photos')
+          ELSE 0
+        END,
+        0
+      )::int AS "photoCount",
+      "createdAt", "updatedAt"
+    FROM "InventoryItem"
+    WHERE 1=1
+    ${ownerSql}
+    ORDER BY "updatedAt" DESC
+    ${limitSql}
+  `);
+
+  const serialized = rows.map((rawRow) => {
+    const result = serializeInventoryItem(rawRow);
+    result.photoCount = Number(rawRow.photoCount ?? 0);
+    return result;
   });
-
-  if (skippedIds.length) {
-    console.error(`Inventory all omitio ${skippedIds.length} registros con texto invalido`);
-  }
 
   return NextResponse.json({
     total,
     statusTotals,
-    items: items.map((item) => serializeInventoryItem(item)),
-    skippedCount: skippedIds.length,
+    items: serialized,
+    skippedCount: 0,
     truncated: shouldTruncate
   });
 }
