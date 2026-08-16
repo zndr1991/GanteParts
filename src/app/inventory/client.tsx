@@ -117,6 +117,17 @@ type InventoryPageCachePayload = {
   facetOptions: InventoryFacetOptions | null;
 };
 
+type InventoryMetaCachePayload = {
+  statusTotals: Record<string, number>;
+  prestadoMetrics: {
+    total: number;
+    debt: number;
+    profit: number;
+  } | null;
+  hasFacetOptions: boolean;
+  facetOptions: InventoryFacetOptions | null;
+};
+
 type ManualNomenclaturePieceEntry = {
   id: string;
   piece: string;
@@ -181,6 +192,8 @@ type InventorySearchWorkerResultMessage = {
   requestId: number;
   ids: string[];
 };
+
+type InventorySearchMode = "general" | "sku" | "pieza_coche";
 
 type InventoryPageSizeOption = 100 | 200 | 500 | "ALL";
 type MlSyncFilterValue = "synced" | "notSynced" | "missingOrInvalid";
@@ -419,6 +432,13 @@ const splitInventorySearchTokens = (value: string) => {
     .filter((token) => token.length);
 
   return Array.from(new Set(tokens)).slice(0, MAX_INVENTORY_SEARCH_TOKENS);
+};
+
+const normalizeInventorySearchMode = (value: unknown): InventorySearchMode => {
+  const normalized = (value ?? "").toString().trim().toLowerCase();
+  if (normalized === "sku") return "sku";
+  if (normalized === "pieza_coche" || normalized === "pieza-coche") return "pieza_coche";
+  return "general";
 };
 
 const parseInventorySearchYearToken = (token: string) => {
@@ -759,6 +779,7 @@ const buildInventoryPageCacheKey = (options: {
   page: number;
   pageSize: number;
   search: string;
+  searchMode: InventorySearchMode;
   statusFilter: string | null;
   marcaFilter: string;
   cocheFilter: string;
@@ -779,6 +800,7 @@ const buildInventoryPageCacheKey = (options: {
     page: Math.max(1, options.page),
     pageSize: Math.max(1, options.pageSize),
     search: options.search.trim(),
+    searchMode: normalizeInventorySearchMode(options.searchMode),
     statusFilter: options.statusFilter?.trim().toUpperCase() || null,
     marcaFilter: options.marcaFilter.trim().toUpperCase(),
     cocheFilter: options.cocheFilter.trim().toUpperCase(),
@@ -786,6 +808,38 @@ const buildInventoryPageCacheKey = (options: {
     prestadoDebtorFilters: normalizedDebtors,
     includeFacetOptions: options.includeFacetOptions,
     includeMeta: options.includeMeta
+  });
+};
+
+const buildInventoryMetaCacheKey = (options: {
+  search: string;
+  searchMode: InventorySearchMode;
+  statusFilter: string | null;
+  marcaFilter: string;
+  cocheFilter: string;
+  piezaFilter: string;
+  prestadoDebtorFilters: string[];
+  includeFacetOptions: boolean;
+  includeStatusTotals: boolean;
+}) => {
+  const normalizedDebtors = Array.from(
+    new Set(
+      options.prestadoDebtorFilters
+        .map((value) => value.trim().toUpperCase())
+        .filter((value) => value.length)
+    )
+  ).sort((a, b) => a.localeCompare(b, "es"));
+
+  return JSON.stringify({
+    search: options.search.trim(),
+    searchMode: normalizeInventorySearchMode(options.searchMode),
+    statusFilter: options.statusFilter?.trim().toUpperCase() || null,
+    marcaFilter: options.marcaFilter.trim().toUpperCase(),
+    cocheFilter: options.cocheFilter.trim().toUpperCase(),
+    piezaFilter: options.piezaFilter.trim().toUpperCase(),
+    prestadoDebtorFilters: normalizedDebtors,
+    includeFacetOptions: options.includeFacetOptions,
+    includeStatusTotals: options.includeStatusTotals
   });
 };
 
@@ -982,6 +1036,8 @@ export function InventoryClient({
   const [exportingSelectedRows, setExportingSelectedRows] = useState(false);
   const [search, setSearch] = useState("");
   const [searchDraft, setSearchDraft] = useState("");
+  const [searchMode, setSearchMode] = useState<InventorySearchMode>("general");
+  const [searchModeDraft, setSearchModeDraft] = useState<InventorySearchMode>("general");
   const [focusedRowInfo, setFocusedRowInfo] = useState<FocusedInfo | null>(null);
   const [statusFilter, setStatusFilter] = useState<string | null>(normalizedInitialStatusFilter);
   const [statusFilterDraft, setStatusFilterDraft] = useState<string | null>(normalizedInitialStatusFilter);
@@ -1094,14 +1150,20 @@ export function InventoryClient({
   const searchWorkerRef = useRef<Worker | null>(null);
   const workerSearchRequestIdRef = useRef(0);
   const inventoryPageRequestIdRef = useRef(0);
+  const inventoryMetaRequestIdRef = useRef(0);
   const inventoryRequestAbortRef = useRef<AbortController | null>(null);
+  const inventoryMetaAbortRef = useRef<AbortController | null>(null);
   const hybridLoadAbortRef = useRef<AbortController | null>(null);
   const hybridAutoloadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hybridAutoAttemptedRef = useRef(!isManualOnly && initialDatasetComplete);
   const hasSkippedInitialServerFetchRef = useRef(false);
   const loadingPageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastServerFilterRequestSignatureRef = useRef<string | null>(null);
+  const lastMetaFilterRequestSignatureRef = useRef<string | null>(null);
   const inventoryPageCacheRef = useRef<Map<string, { expiresAt: number; payload: InventoryPageCachePayload }>>(
+    new Map()
+  );
+  const inventoryMetaCacheRef = useRef<Map<string, { expiresAt: number; payload: InventoryMetaCachePayload }>>(
     new Map()
   );
   const manualSkuSequenceCacheRef = useRef(new Map<string, number>());
@@ -1382,6 +1444,10 @@ export function InventoryClient({
         inventoryRequestAbortRef.current.abort();
         inventoryRequestAbortRef.current = null;
       }
+      if (inventoryMetaAbortRef.current) {
+        inventoryMetaAbortRef.current.abort();
+        inventoryMetaAbortRef.current = null;
+      }
       if (hybridLoadAbortRef.current) {
         hybridLoadAbortRef.current.abort();
         hybridLoadAbortRef.current = null;
@@ -1433,6 +1499,7 @@ export function InventoryClient({
       }
 
       inventoryPageCacheRef.current.clear();
+      inventoryMetaCacheRef.current.clear();
       setInventoryReloadSeq((current) => current + 1);
     }, INVENTORY_REALTIME_REFRESH_INTERVAL_MS);
 
@@ -1502,6 +1569,7 @@ export function InventoryClient({
     page: number;
     pageSize: number;
     search: string;
+    searchMode: InventorySearchMode;
     statusFilter: string | null;
     marcaFilter: string;
     cocheFilter: string;
@@ -1533,10 +1601,12 @@ export function InventoryClient({
 
     const includeMeta = options.includeMeta !== false;
     const includeFacetOptions = includeMeta && Boolean(options.includeFacetOptions);
+    const resolvedSearchMode = normalizeInventorySearchMode(options.searchMode);
     const cacheKey = buildInventoryPageCacheKey({
       page: options.page,
       pageSize: options.pageSize,
       search: options.search,
+      searchMode: resolvedSearchMode,
       statusFilter: options.statusFilter,
       marcaFilter: options.marcaFilter,
       cocheFilter: options.cocheFilter,
@@ -1573,6 +1643,7 @@ export function InventoryClient({
 
     const hasInteractiveFilters =
       options.search.trim().length > 0 ||
+      resolvedSearchMode !== "general" ||
       Boolean(options.statusFilter) ||
       options.marcaFilter.trim().length > 0 ||
       options.cocheFilter.trim().length > 0 ||
@@ -1602,6 +1673,9 @@ export function InventoryClient({
       const searchValue = options.search.trim();
       if (searchValue.length) {
         params.set("search", searchValue);
+        if (resolvedSearchMode !== "general") {
+          params.set("searchMode", resolvedSearchMode);
+        }
       }
 
       if (options.statusFilter?.trim().length) {
@@ -1619,6 +1693,8 @@ export function InventoryClient({
       if (includeFacetOptions) {
         params.set("includeFacetOptions", "1");
       }
+      params.set("includeStatusTotals", includeMeta ? "1" : "0");
+      params.set("includeFilterOptions", includeFacetOptions ? "1" : "0");
       if (!includeMeta) {
         params.set("includeMeta", "0");
       }
@@ -1721,6 +1797,166 @@ export function InventoryClient({
     }
   }, [mergeIncomingWithLocalOverrides]);
 
+  const fetchInventoryMeta = useCallback(async (options: {
+    search: string;
+    searchMode: InventorySearchMode;
+    statusFilter: string | null;
+    marcaFilter: string;
+    cocheFilter: string;
+    piezaFilter: string;
+    prestadoDebtorFilters: string[];
+    includeFacetOptions?: boolean;
+    includeStatusTotals?: boolean;
+  }) => {
+    const requestId = inventoryMetaRequestIdRef.current + 1;
+    inventoryMetaRequestIdRef.current = requestId;
+
+    if (inventoryMetaAbortRef.current) {
+      inventoryMetaAbortRef.current.abort();
+      inventoryMetaAbortRef.current = null;
+    }
+
+    const includeFacetOptions = Boolean(options.includeFacetOptions);
+    const includeStatusTotals = options.includeStatusTotals !== false;
+    const resolvedSearchMode = normalizeInventorySearchMode(options.searchMode);
+    const cacheKey = buildInventoryMetaCacheKey({
+      search: options.search,
+      searchMode: resolvedSearchMode,
+      statusFilter: options.statusFilter,
+      marcaFilter: options.marcaFilter,
+      cocheFilter: options.cocheFilter,
+      piezaFilter: options.piezaFilter,
+      prestadoDebtorFilters: options.prestadoDebtorFilters,
+      includeFacetOptions,
+      includeStatusTotals
+    });
+
+    const cached = inventoryMetaCacheRef.current.get(cacheKey);
+    const now = Date.now();
+    if (cached && cached.expiresAt > now) {
+      if (includeStatusTotals) {
+        setStatusTotals(cached.payload.statusTotals);
+        setPrestadoMetrics(cached.payload.prestadoMetrics);
+      }
+      if (includeFacetOptions && cached.payload.hasFacetOptions && cached.payload.facetOptions) {
+        setServerFacetOptions(cached.payload.facetOptions);
+      }
+      return true;
+    }
+    if (cached) {
+      inventoryMetaCacheRef.current.delete(cacheKey);
+    }
+
+    const requestController = new AbortController();
+    inventoryMetaAbortRef.current = requestController;
+
+    try {
+      const params = new URLSearchParams({
+        metaOnly: "1",
+        includeStatusTotals: includeStatusTotals ? "1" : "0",
+        includeFilterOptions: includeFacetOptions ? "1" : "0"
+      });
+
+      const searchValue = options.search.trim();
+      if (searchValue.length) {
+        params.set("search", searchValue);
+        if (resolvedSearchMode !== "general") {
+          params.set("searchMode", resolvedSearchMode);
+        }
+      }
+
+      if (options.statusFilter?.trim().length) {
+        params.set("statusFilter", options.statusFilter.trim());
+      }
+      if (options.marcaFilter.trim().length) {
+        params.set("marcaFilter", options.marcaFilter.trim());
+      }
+      if (options.cocheFilter.trim().length) {
+        params.set("cocheFilter", options.cocheFilter.trim());
+      }
+      if (options.piezaFilter.trim().length) {
+        params.set("piezaFilter", options.piezaFilter.trim());
+      }
+      options.prestadoDebtorFilters
+        .map((value) => value.trim())
+        .filter((value) => value.length)
+        .forEach((value) => {
+          params.append("prestadoDebtorFilter", value);
+        });
+
+      const res = await fetch(`/api/inventory?${params.toString()}`, {
+        cache: "no-store",
+        signal: requestController.signal
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "No se pudo obtener metadatos de inventario");
+      }
+
+      if (inventoryMetaRequestIdRef.current !== requestId) {
+        return false;
+      }
+
+      const shouldUpdateStatusTotals = Object.prototype.hasOwnProperty.call(data, "statusTotals");
+      const nextStatusTotals = shouldUpdateStatusTotals
+        ? normalizeStatusTotals(data.statusTotals)
+        : statusTotalsRef.current;
+      const shouldUpdatePrestadoMetrics = Object.prototype.hasOwnProperty.call(data, "prestadoMetrics");
+      const nextPrestadoMetrics = shouldUpdatePrestadoMetrics
+        ? normalizePrestadoMetrics(data.prestadoMetrics)
+        : prestadoMetricsRef.current;
+      const shouldUpdateFacetOptions = Object.prototype.hasOwnProperty.call(data, "facetOptions");
+      const nextFacetOptions = shouldUpdateFacetOptions ? normalizeFacetOptions(data.facetOptions) : null;
+
+      const payload: InventoryMetaCachePayload = {
+        statusTotals: nextStatusTotals,
+        prestadoMetrics: nextPrestadoMetrics,
+        hasFacetOptions: shouldUpdateFacetOptions,
+        facetOptions: nextFacetOptions
+      };
+
+      inventoryMetaCacheRef.current.set(cacheKey, {
+        expiresAt: Date.now() + INVENTORY_PAGE_CACHE_TTL_MS,
+        payload
+      });
+      if (inventoryMetaCacheRef.current.size > 120) {
+        const pruneNow = Date.now();
+        for (const [key, entry] of inventoryMetaCacheRef.current.entries()) {
+          if (entry.expiresAt <= pruneNow) {
+            inventoryMetaCacheRef.current.delete(key);
+          }
+        }
+        while (inventoryMetaCacheRef.current.size > 120) {
+          const firstKey = inventoryMetaCacheRef.current.keys().next().value;
+          if (!firstKey) break;
+          inventoryMetaCacheRef.current.delete(firstKey);
+        }
+      }
+
+      if (includeStatusTotals) {
+        setStatusTotals(payload.statusTotals);
+        setPrestadoMetrics(payload.prestadoMetrics);
+      }
+      if (includeFacetOptions && payload.hasFacetOptions && payload.facetOptions) {
+        setServerFacetOptions(payload.facetOptions);
+      }
+
+      return true;
+    } catch (err: any) {
+      if (err?.name === "AbortError") {
+        return false;
+      }
+      if (inventoryMetaRequestIdRef.current === requestId) {
+        setMessage((current) => current ?? err?.message ?? "No se pudo actualizar filtros de inventario");
+      }
+      return false;
+    } finally {
+      if (inventoryMetaAbortRef.current === requestController) {
+        inventoryMetaAbortRef.current = null;
+      }
+    }
+  }, []);
+
   const loadAllInventoryForHybrid = useCallback(async (options?: { force?: boolean }) => {
     if (isManualOnly) return false;
     if (!options?.force && !canAutoEnableHybridLocal) return false;
@@ -1772,6 +2008,7 @@ export function InventoryClient({
       setFocusedRowInfo(null);
       setHybridLocalMode(true);
       inventoryPageCacheRef.current.clear();
+      inventoryMetaCacheRef.current.clear();
       return true;
     } catch (err: any) {
       if (err?.name === "AbortError") {
@@ -1812,6 +2049,9 @@ export function InventoryClient({
     if (isManualOnly) return;
     if (useServerPagination) {
       inventoryPageCacheRef.current.clear();
+      inventoryMetaCacheRef.current.clear();
+      lastServerFilterRequestSignatureRef.current = null;
+      lastMetaFilterRequestSignatureRef.current = null;
       setInventoryReloadSeq((current) => current + 1);
       return;
     }
@@ -4449,21 +4689,31 @@ export function InventoryClient({
   );
   const hasActiveMlSyncFilter = mlSyncFilter !== null;
   const hasActiveInventorySearch = normalizedSearchTokenChecks.length > 0;
+  const hasDraftInventorySearch = searchDraft.trim().length > 0;
+  const hasSearchModeDraftChange =
+    (hasDraftInventorySearch || hasActiveInventorySearch) && searchModeDraft !== searchMode;
+  const hasActiveSearchModeFilter = hasActiveInventorySearch && searchMode !== "general";
   const hasActiveInventoryFacets =
     normalizedInventoryMarcaFilter.length > 0 ||
     normalizedInventoryCocheFilter.length > 0 ||
     normalizedInventoryPiezaFilter.length > 0 ||
     normalizedPrestadoDebtorFilters.length > 0;
   const hasAnyInventoryFiltersActive =
-    hasActiveInventorySearch || Boolean(normalizedStatusFilter) || hasActiveInventoryFacets || hasActiveMlSyncFilter;
+    hasActiveInventorySearch ||
+    hasActiveSearchModeFilter ||
+    Boolean(normalizedStatusFilter) ||
+    hasActiveInventoryFacets ||
+    hasActiveMlSyncFilter;
   const hasAnyDraftInventoryFilters =
-    searchDraft.trim().length > 0 ||
+    hasDraftInventorySearch ||
+    (hasDraftInventorySearch && searchModeDraft !== "general") ||
     Boolean(normalizedStatusFilterDraft) ||
     normalizedInventoryMarcaFilterDraft.length > 0 ||
     normalizedInventoryCocheFilterDraft.length > 0 ||
     normalizedInventoryPiezaFilterDraft.length > 0;
   const hasPendingFilterDraftChanges =
     searchDraft.trim() !== search ||
+    hasSearchModeDraftChange ||
     normalizedStatusFilterDraft !== normalizedStatusFilter ||
     normalizedInventoryMarcaFilterDraft !== normalizedInventoryMarcaFilter ||
     normalizedInventoryCocheFilterDraft !== normalizedInventoryCocheFilter ||
@@ -4473,17 +4723,23 @@ export function InventoryClient({
     inventoryPageSize === "ALL" ? INVENTORY_PAGE_BLOCK_SIZE_ALL_REQUEST : inventoryPageSize;
   const activeInventoryFilterCount =
     Number(hasActiveInventorySearch) +
+    Number(hasActiveSearchModeFilter) +
     Number(Boolean(normalizedStatusFilter)) +
     Number(normalizedInventoryMarcaFilter.length > 0) +
     Number(normalizedInventoryCocheFilter.length > 0) +
     Number(normalizedInventoryPiezaFilter.length > 0) +
     Number(hasActiveMlSyncFilter) +
     Number(normalizedPrestadoDebtorFilters.length > 0);
+  const searchModeLabel =
+    searchMode === "sku" ? "SKU" : searchMode === "pieza_coche" ? "Pieza + coche" : "General";
 
   const clearInventoryFilters = useCallback(() => {
     setSearchDraft("");
     setSearch("");
+    setSearchModeDraft("general");
+    setSearchMode("general");
     lastServerFilterRequestSignatureRef.current = null;
+    lastMetaFilterRequestSignatureRef.current = null;
     setStatusFilter(null);
     setStatusFilterDraft(null);
     setInventoryMarcaFilter("");
@@ -4515,6 +4771,7 @@ export function InventoryClient({
 
   const applyInventorySearch = useCallback(() => {
     const nextSearch = searchDraft.trim();
+    const nextSearchMode = normalizeInventorySearchMode(searchModeDraft);
     const nextStatus = normalizedStatusFilterDraft;
     const nextMarcaFilter = normalizedInventoryMarcaFilterDraft;
     const nextCocheFilter = normalizedInventoryCocheFilterDraft;
@@ -4522,6 +4779,7 @@ export function InventoryClient({
 
     if (
       nextSearch === search &&
+      nextSearchMode === searchMode &&
       nextStatus === normalizedStatusFilter &&
       nextMarcaFilter === normalizedInventoryMarcaFilter &&
       nextCocheFilter === normalizedInventoryCocheFilter &&
@@ -4529,13 +4787,16 @@ export function InventoryClient({
     ) {
       if (useServerPagination) {
         inventoryPageCacheRef.current.clear();
+        inventoryMetaCacheRef.current.clear();
         lastServerFilterRequestSignatureRef.current = null;
+        lastMetaFilterRequestSignatureRef.current = null;
         setInventoryReloadSeq((current) => current + 1);
       }
       return;
     }
 
     setSearch(nextSearch);
+  setSearchMode(nextSearchMode);
     lastServerFilterRequestSignatureRef.current = null;
     setStatusFilter(nextStatus);
     setInventoryMarcaFilter(nextMarcaFilter);
@@ -4547,7 +4808,9 @@ export function InventoryClient({
     setInventoryPage(1);
   }, [
     search,
+    searchMode,
     searchDraft,
+    searchModeDraft,
     normalizedStatusFilterDraft,
     normalizedStatusFilter,
     normalizedInventoryMarcaFilterDraft,
@@ -4560,12 +4823,15 @@ export function InventoryClient({
   ]);
 
   const clearAppliedInventorySearch = useCallback(() => {
-    if (!search.length && !searchDraft.length) return;
+    if (!search.length && !searchDraft.length && searchMode === "general" && searchModeDraft === "general") return;
     setSearch("");
     setSearchDraft("");
+    setSearchMode("general");
+    setSearchModeDraft("general");
     lastServerFilterRequestSignatureRef.current = null;
+    lastMetaFilterRequestSignatureRef.current = null;
     setInventoryPage(1);
-  }, [search, searchDraft]);
+  }, [search, searchDraft, searchMode, searchModeDraft]);
 
   const applyStatusTabFilter = useCallback((nextStatus: string | null) => {
     setStatusFilterDraft(nextStatus);
@@ -4594,7 +4860,8 @@ export function InventoryClient({
 
   useEffect(() => {
     setSearchDraft(search);
-  }, [search]);
+    setSearchModeDraft(searchMode);
+  }, [search, searchMode]);
 
   useEffect(() => {
     setStatusFilterDraft(statusFilter);
@@ -4614,9 +4881,12 @@ export function InventoryClient({
     if (hybridLocalHydrating) return;
 
     const effectiveServerSearchTerm = search.trim();
+    const resolvedServerSearchMode =
+      effectiveServerSearchTerm.length > 0 ? normalizeInventorySearchMode(searchMode) : "general";
 
     const requestFilterSignature = JSON.stringify({
       search: effectiveServerSearchTerm,
+      searchMode: resolvedServerSearchMode,
       statusFilter: normalizedStatusFilter,
       marcaFilter: normalizedInventoryMarcaFilter,
       cocheFilter: normalizedInventoryCocheFilter,
@@ -4632,6 +4902,7 @@ export function InventoryClient({
       hasSkippedInitialServerFetchRef.current = true;
       const hasInitialFilters =
         effectiveServerSearchTerm.length > 0 ||
+        resolvedServerSearchMode !== "general" ||
         Boolean(normalizedStatusFilter) ||
         normalizedInventoryMarcaFilter.length > 0 ||
         normalizedInventoryCocheFilter.length > 0 ||
@@ -4664,21 +4935,44 @@ export function InventoryClient({
       effectiveServerSearchTerm.length === 0 &&
       !normalizedStatusFilter &&
       !hasAnyFacetFilterActive;
+    const metaRequestSignature = JSON.stringify({
+      filters: requestFilterSignature,
+      includeFacetOptions: shouldIncludeFacetOptions,
+      includeStatusTotals: true,
+      reloadSeq: inventoryReloadSeq
+    });
 
     void fetchInventoryPage({
       page: inventoryPage,
       pageSize: inventoryRequestPageSize,
       search: effectiveServerSearchTerm,
+      searchMode: resolvedServerSearchMode,
       statusFilter: normalizedStatusFilter,
       marcaFilter: normalizedInventoryMarcaFilter,
       cocheFilter: normalizedInventoryCocheFilter,
       piezaFilter: normalizedInventoryPiezaFilter,
       prestadoDebtorFilters: normalizedStatusFilter === "PRESTADO" ? normalizedPrestadoDebtorFilters : [],
-      includeMeta: shouldIncludeMeta,
-      includeFacetOptions: shouldIncludeFacetOptions,
+      includeMeta: false,
+      includeFacetOptions: false,
       preserveSelection: !filtersChanged
     });
+
+    if (lastMetaFilterRequestSignatureRef.current !== metaRequestSignature) {
+      lastMetaFilterRequestSignatureRef.current = metaRequestSignature;
+      void fetchInventoryMeta({
+        search: effectiveServerSearchTerm,
+        searchMode: resolvedServerSearchMode,
+        statusFilter: normalizedStatusFilter,
+        marcaFilter: normalizedInventoryMarcaFilter,
+        cocheFilter: normalizedInventoryCocheFilter,
+        piezaFilter: normalizedInventoryPiezaFilter,
+        prestadoDebtorFilters: normalizedStatusFilter === "PRESTADO" ? normalizedPrestadoDebtorFilters : [],
+        includeFacetOptions: shouldIncludeFacetOptions,
+        includeStatusTotals: true
+      });
+    }
   }, [
+    fetchInventoryMeta,
     fetchInventoryPage,
     inventoryPage,
     inventoryReloadSeq,
@@ -4689,6 +4983,7 @@ export function InventoryClient({
     normalizedStatusFilter,
     initialPage.items.length,
     inventoryRequestPageSize,
+    searchMode,
     search,
     hybridLocalHydrating,
     useServerPagination
@@ -5084,6 +5379,7 @@ export function InventoryClient({
     setInventoryPage(1);
   }, [
     normalizedSearch,
+    searchMode,
     normalizedStatusFilter,
     normalizedInventoryMarcaFilter,
     normalizedInventoryCocheFilter,
@@ -6609,7 +6905,7 @@ export function InventoryClient({
 
             <div className={`mt-3 grid grid-cols-1 gap-2 ${normalizedStatusFilter === "PRESTADO" ? "xl:grid-cols-6" : "xl:grid-cols-5"}`}>
               <form
-                className="xl:col-span-2 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto_auto]"
+                className="xl:col-span-2 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto]"
                 onSubmit={(event) => {
                   event.preventDefault();
                   applyInventorySearch();
@@ -6622,6 +6918,15 @@ export function InventoryClient({
                   placeholder="Buscar por SKU, titulo, codigo ML..."
                   className="w-full rounded-xl bg-slate-900 border border-slate-700 px-3 py-2.5 text-sm focus:border-amber-400 focus:outline-none"
                 />
+                <select
+                  value={searchModeDraft}
+                  onChange={(event) => setSearchModeDraft(normalizeInventorySearchMode(event.target.value))}
+                  className="rounded-xl bg-slate-900 border border-slate-700 px-3 py-2.5 text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
+                >
+                  <option value="general">Busqueda general</option>
+                  <option value="sku">SKU directo</option>
+                  <option value="pieza_coche">Pieza + coche</option>
+                </select>
                 <button
                   type="submit"
                   disabled={!hasPendingFilterDraftChanges && !hasAnyInventoryFiltersActive}
@@ -6744,7 +7049,7 @@ export function InventoryClient({
                     onClick={clearAppliedInventorySearch}
                     className="rounded-full border border-slate-600 bg-slate-900/80 px-2 py-1 text-[11px] text-slate-200 hover:border-amber-300"
                   >
-                    Buscar: {search.trim().slice(0, 28)}
+                    Buscar ({searchModeLabel}): {search.trim().slice(0, 28)}
                   </button>
                 )}
                 {normalizedStatusFilter && (
@@ -7097,7 +7402,9 @@ export function InventoryClient({
                           setInventoryPageSize(nextPageSize);
                           setInventoryPage(1);
                           inventoryPageCacheRef.current.clear();
+                          inventoryMetaCacheRef.current.clear();
                           lastServerFilterRequestSignatureRef.current = null;
+                          lastMetaFilterRequestSignatureRef.current = null;
                           if (useServerPagination) {
                             setInventoryReloadSeq((current) => current + 1);
                           }

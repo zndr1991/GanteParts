@@ -1,19 +1,18 @@
 import { unstable_cache } from "next/cache";
 import { Prisma } from "@prisma/client";
 import type { InventoryClientItem } from "@/app/inventory/client";
-import { getCachedInventoryFullSnapshot, serializeInventoryListRow, type InventoryListRow } from "@/lib/inventory-full-snapshot";
+import { serializeInventoryListRow, type InventoryListRow } from "@/lib/inventory-full-snapshot";
 import { prisma } from "@/lib/prisma";
 import { serializeInventoryItem } from "@/lib/inventory-serialization";
 import { fetchInventoryItemsSafely } from "@/lib/inventory-safe-load";
 
 const INVENTORY_PAGE_SIZE = 50;
-const MAX_INITIAL_PAGE_SIZE = 5000;
 const INVENTORY_INITIAL_LOAD_ENV = Number(
   process.env.INVENTORY_INITIAL_LOAD_LIMIT ?? process.env.INVENTORY_FULL_LOAD_LIMIT ?? `${INVENTORY_PAGE_SIZE}`
 );
 const MAX_CACHE_TAKE =
   Number.isFinite(INVENTORY_INITIAL_LOAD_ENV) && INVENTORY_INITIAL_LOAD_ENV > 0
-    ? Math.min(Math.floor(INVENTORY_INITIAL_LOAD_ENV), MAX_INITIAL_PAGE_SIZE)
+    ? Math.min(Math.floor(INVENTORY_INITIAL_LOAD_ENV), INVENTORY_PAGE_SIZE)
     : INVENTORY_PAGE_SIZE;
 const INVENTORY_SNAPSHOT_TIMEOUT_MS_ENV = Number(process.env.INVENTORY_SNAPSHOT_TIMEOUT_MS ?? "9000");
 const INVENTORY_SNAPSHOT_TIMEOUT_MS =
@@ -68,7 +67,13 @@ const resolveSnapshotWhere = (ownerId: string | null): InventoryWhere => {
 };
 
 const resolveRequestedTake = (take: number) => {
-  return Number.isFinite(take) && take > 0 ? Math.floor(take) : MAX_CACHE_TAKE;
+  if (!Number.isFinite(take) || take <= 0) return MAX_CACHE_TAKE;
+  return Math.min(Math.floor(take), MAX_CACHE_TAKE);
+};
+
+const resolveManualRequestedTake = (take: number) => {
+  if (!Number.isFinite(take) || take <= 0) return INVENTORY_PAGE_SIZE;
+  return Math.floor(take);
 };
 
 const normalizeStatusLabel = (value: unknown) => {
@@ -82,6 +87,33 @@ const buildStatusTotalsFromItems = (items: InventoryClientItem[]) => {
     const key = normalizeStatusLabel(item.extraData?.estatus_interno);
     totals[key] = (totals[key] ?? 0) + 1;
   });
+  return totals;
+};
+
+type StatusCountRow = {
+  label: string | null;
+  count: number | bigint | string;
+};
+
+const queryStatusTotals = async (ownerId: string | null) => {
+  const whereSql = ownerId ? Prisma.sql`WHERE "ownerId" = ${ownerId}` : Prisma.empty;
+  const rows = await prisma.$queryRaw<StatusCountRow[]>(Prisma.sql`
+    SELECT
+      COALESCE(NULLIF(UPPER(TRIM("extraData"->>'estatus_interno')), ''), 'SIN ESTATUS') AS label,
+      COUNT(*) AS count
+    FROM "InventoryItem"
+    ${whereSql}
+    GROUP BY 1
+  `);
+
+  const totals: Record<string, number> = {};
+  rows.forEach((row) => {
+    const key = (row.label ?? "").toString().trim().toUpperCase() || "SIN ESTATUS";
+    const parsedCount = Number(row.count ?? 0);
+    if (!Number.isFinite(parsedCount) || parsedCount <= 0) return;
+    totals[key] = Math.round(parsedCount);
+  });
+
   return totals;
 };
 
@@ -115,46 +147,42 @@ const loadLightweightInitialRows = async (ownerId: string | null, take: number) 
   return rows.map((row) => serializeInventoryListRow(row) as InventoryClientItem);
 };
 
-export const getInventorySnapshot = async (ownerId: string | null, take?: number) => {
-  const scopeKey = buildInventorySnapshotScopeKey(ownerId ?? null);
-  const snapshot = getCachedInventoryFullSnapshot(ownerId);
-  if (snapshot) {
-    const payload: InventorySnapshotResult = {
-      items: snapshot.items as InventoryClientItem[],
-      total: snapshot.total,
-      statusTotals: snapshot.statusTotals,
-      skippedCount: snapshot.skippedCount,
-      complete: snapshot.complete,
-      truncated: snapshot.truncated
-    };
-    lastInventorySnapshotByScope.set(scopeKey, {
-      ...payload,
-      updatedAt: Date.now()
-    });
-    return payload;
-  }
+const fetchInventorySnapshot = unstable_cache(
+  async (ownerId: string | null, take: number): Promise<InventorySnapshotResult> => {
+    const where = resolveSnapshotWhere(ownerId);
+    const requested = resolveRequestedTake(take);
 
-  const where = resolveSnapshotWhere(ownerId);
-  const requested = resolveRequestedTake(take ?? MAX_CACHE_TAKE);
-
-  try {
-    const [total, plainItems] = await withTimeout(
-      Promise.all([
-        prisma.inventoryItem.count({ where }),
-        loadLightweightInitialRows(ownerId, requested)
-      ]),
-      INVENTORY_SNAPSHOT_TIMEOUT_MS
-    );
+    const [total, plainItems, statusTotals] = await Promise.all([
+      prisma.inventoryItem.count({ where }),
+      loadLightweightInitialRows(ownerId, requested),
+      queryStatusTotals(ownerId)
+    ]);
 
     const truncated = plainItems.length < total;
-    const payload: InventorySnapshotResult = {
+    return {
       items: plainItems,
       total,
-      statusTotals: buildStatusTotalsFromItems(plainItems),
+      statusTotals,
       skippedCount: 0,
       complete: !truncated,
       truncated
     };
+  },
+  ["inventory-initial"],
+  { revalidate: 45, tags: ["inventory-initial"] }
+);
+
+export const getInventorySnapshot = async (ownerId: string | null, take?: number) => {
+  const scopeKey = buildInventorySnapshotScopeKey(ownerId ?? null);
+  const where = resolveSnapshotWhere(ownerId);
+  const requested = resolveRequestedTake(take ?? MAX_CACHE_TAKE);
+
+  try {
+    const payload = await withTimeout(
+      fetchInventorySnapshot(ownerId ?? null, requested),
+      INVENTORY_SNAPSHOT_TIMEOUT_MS
+    );
+
     lastInventorySnapshotByScope.set(scopeKey, {
       ...payload,
       updatedAt: Date.now()
@@ -180,15 +208,24 @@ export const getInventorySnapshot = async (ownerId: string | null, take?: number
 
     try {
       const fallbackTake = Math.max(1, Math.min(requested, INVENTORY_PAGE_SIZE));
-      const fallbackRows = await loadLightweightInitialRows(ownerId, fallbackTake);
+      const [fallbackRows, fallbackTotal, fallbackStatusTotals] = await Promise.all([
+        loadLightweightInitialRows(ownerId, fallbackTake),
+        prisma.inventoryItem.count({ where }).catch(() => 0),
+        queryStatusTotals(ownerId).catch(() => ({} as Record<string, number>))
+      ]);
       if (fallbackRows.length > 0) {
+        const resolvedTotal = fallbackTotal > 0 ? fallbackTotal : fallbackRows.length;
+        const resolvedStatusTotals =
+          Object.keys(fallbackStatusTotals).length > 0
+            ? fallbackStatusTotals
+            : buildStatusTotalsFromItems(fallbackRows);
         const payload: InventorySnapshotResult = {
           items: fallbackRows,
-          total: fallbackRows.length,
-          statusTotals: buildStatusTotalsFromItems(fallbackRows),
+          total: resolvedTotal,
+          statusTotals: resolvedStatusTotals,
           skippedCount: 0,
-          complete: false,
-          truncated: true
+          complete: fallbackRows.length >= resolvedTotal,
+          truncated: fallbackRows.length < resolvedTotal
         };
         lastInventorySnapshotByScope.set(scopeKey, {
           ...payload,
@@ -206,19 +243,28 @@ export const getInventorySnapshot = async (ownerId: string | null, take?: number
 
     try {
       const fallbackTake = Math.max(1, Math.min(requested, INVENTORY_PAGE_SIZE));
-      const safeItems = await fetchInventoryItemsSafely({
-        where,
-        take: fallbackTake
-      });
+      const [safeItems, fallbackTotal, fallbackStatusTotals] = await Promise.all([
+        fetchInventoryItemsSafely({
+          where,
+          take: fallbackTake
+        }),
+        prisma.inventoryItem.count({ where }).catch(() => 0),
+        queryStatusTotals(ownerId).catch(() => ({} as Record<string, number>))
+      ]);
       const fallbackRows = safeItems.items.map((item) => serializeInventoryItem(item) as InventoryClientItem);
       if (fallbackRows.length > 0) {
+        const resolvedTotal = fallbackTotal > 0 ? fallbackTotal : fallbackRows.length;
+        const resolvedStatusTotals =
+          Object.keys(fallbackStatusTotals).length > 0
+            ? fallbackStatusTotals
+            : buildStatusTotalsFromItems(fallbackRows);
         const payload: InventorySnapshotResult = {
           items: fallbackRows,
-          total: fallbackRows.length,
-          statusTotals: buildStatusTotalsFromItems(fallbackRows),
+          total: resolvedTotal,
+          statusTotals: resolvedStatusTotals,
           skippedCount: safeItems.skippedIds.length,
-          complete: false,
-          truncated: true
+          complete: fallbackRows.length >= resolvedTotal,
+          truncated: fallbackRows.length < resolvedTotal
         };
         lastInventorySnapshotByScope.set(scopeKey, {
           ...payload,
@@ -251,7 +297,7 @@ export const getInventorySnapshot = async (ownerId: string | null, take?: number
 const fetchManualInventorySnapshot = unstable_cache(
   async (ownerId: string | null, take: number) => {
     const where = resolveSnapshotWhere(ownerId);
-    const requested = resolveRequestedTake(take);
+    const requested = resolveManualRequestedTake(take);
 
     const { items, skippedIds } = await fetchInventoryItemsSafely({
       where,

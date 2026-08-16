@@ -120,11 +120,20 @@ const parseStatusFilter = (searchParams: URLSearchParams) => {
   return raw.toUpperCase();
 };
 
+type InventorySearchMode = "general" | "sku" | "pieza_coche";
+
 const parseSearchFilter = (searchParams: URLSearchParams) => {
   const raw = (searchParams.get("search") ?? "").trim();
   if (!raw.length) return null;
   if (!splitSearchTokens(raw).length) return null;
   return raw;
+};
+
+const parseSearchMode = (searchParams: URLSearchParams): InventorySearchMode => {
+  const raw = (searchParams.get("searchMode") ?? "general").trim().toLowerCase();
+  if (raw === "sku") return "sku";
+  if (raw === "pieza_coche" || raw === "pieza-coche") return "pieza_coche";
+  return "general";
 };
 
 const splitSearchTokens = (value: string) => {
@@ -180,6 +189,28 @@ const parseIncludeMeta = (searchParams: URLSearchParams) => {
   const raw = (searchParams.get("includeMeta") ?? "").trim().toLowerCase();
   if (!raw.length) return true;
   return raw === "1" || raw === "true" || raw === "yes";
+};
+
+const parseMetaOnly = (searchParams: URLSearchParams) => {
+  const raw = (searchParams.get("metaOnly") ?? "").trim().toLowerCase();
+  if (!raw.length) return false;
+  return raw === "1" || raw === "true" || raw === "yes";
+};
+
+const parseIncludeFilterOptions = (
+  searchParams: URLSearchParams,
+  includeFacetOptions: boolean,
+  includeMeta: boolean
+) => {
+  const raw = (searchParams.get("includeFilterOptions") ?? "").trim().toLowerCase();
+  if (!raw.length) return includeMeta && includeFacetOptions;
+  return raw === "1" || raw === "true" || raw === "yes";
+};
+
+const parseIncludeStatusTotals = (searchParams: URLSearchParams, includeMeta: boolean) => {
+  const raw = (searchParams.get("includeStatusTotals") ?? "").trim().toLowerCase();
+  if (!raw.length) return includeMeta;
+  return raw !== "0" && raw !== "false" && raw !== "no";
 };
 
 // Debe mantenerse alineado con el índice trigram InventoryItem_search_document_trgm_idx.
@@ -249,8 +280,60 @@ const NORMALIZED_SKU_SQL = Prisma.sql`replace(replace(replace(lower(coalesce("sk
 const NORMALIZED_ML_SQL = Prisma.sql`replace(replace(replace(lower(coalesce("mlItemId", '')), '-', ''), ' ', ''), '_', '')`;
 const NORMALIZED_SELLER_SQL = Prisma.sql`replace(replace(replace(lower(coalesce("sellerCustomField", '')), '-', ''), ' ', ''), '_', '')`;
 
-const buildSearchFilterSql = (searchFilter: string | null, options?: { lightweight?: boolean }) => {
+const buildSearchFilterSql = (
+  searchFilter: string | null,
+  searchMode: InventorySearchMode,
+  options?: { lightweight?: boolean }
+) => {
   if (!searchFilter) return Prisma.empty;
+
+  if (searchMode === "sku") {
+    const compactSku = normalizeSearchToken(searchFilter);
+    if (!compactSku.length) return Prisma.empty;
+
+    const exactValue = compactSku;
+    const prefixValue = `${compactSku}%`;
+    return Prisma.sql`
+      AND (
+        REGEXP_REPLACE(
+          UPPER(TRIM(COALESCE("skuInternal", ''))),
+          '[^A-Z0-9]+',
+          '',
+          'g'
+        ) = UPPER(${exactValue})
+        OR REGEXP_REPLACE(
+          UPPER(TRIM(COALESCE("skuInternal", ''))),
+          '[^A-Z0-9]+',
+          '',
+          'g'
+        ) LIKE UPPER(${prefixValue})
+      )
+    `;
+  }
+
+  if (searchMode === "pieza_coche") {
+    const terms = splitSearchTokens(searchFilter);
+    if (!terms.length) return Prisma.empty;
+
+    const termClauses = Prisma.join(
+      terms.map((term) => {
+        const likeValue = `%${term}%`;
+        return Prisma.sql`
+          (
+            COALESCE("extraData"->>'pieza', '') ILIKE ${likeValue}
+            OR COALESCE("title", '') ILIKE ${likeValue}
+            OR COALESCE("extraData"->>'coche', '') ILIKE ${likeValue}
+          )
+        `;
+      }),
+      " AND "
+    );
+
+    return Prisma.sql`
+      AND (${termClauses})
+    `;
+  }
+
   const tokens = splitSearchTokens(searchFilter);
   if (!tokens.length) return Prisma.empty;
 
@@ -720,6 +803,40 @@ const queryStatusTotals = async (ownerId: string | null) => {
   return totals;
 };
 
+const queryStatusTotalsWithFilters = async (params: {
+  ownerSql: Prisma.Sql;
+  searchSql: Prisma.Sql;
+  marcaSql: Prisma.Sql;
+  cocheSql: Prisma.Sql;
+  piezaSql: Prisma.Sql;
+  prestadoDebtorSql: Prisma.Sql;
+}) => {
+  const rows = await prisma.$queryRaw<StatusCountRow[]>(Prisma.sql`
+    SELECT
+      COALESCE(NULLIF(UPPER(TRIM("extraData"->>'estatus_interno')), ''), 'SIN ESTATUS') AS label,
+      COUNT(*) AS count
+    FROM "InventoryItem"
+    WHERE 1=1
+    ${params.ownerSql}
+    ${params.searchSql}
+    ${params.marcaSql}
+    ${params.cocheSql}
+    ${params.piezaSql}
+    ${params.prestadoDebtorSql}
+    GROUP BY 1
+  `);
+
+  const totals: Record<string, number> = {};
+  rows.forEach((row) => {
+    const key = (row.label ?? "").toString().trim().toUpperCase() || "SIN ESTATUS";
+    const parsedCount = Number(row.count ?? 0);
+    if (!Number.isFinite(parsedCount) || parsedCount <= 0) return;
+    totals[key] = Math.round(parsedCount);
+  });
+
+  return totals;
+};
+
 const getStatusTotals = async (ownerId: string | null) => {
   const key = statusTotalsCacheKey(ownerId);
   const now = Date.now();
@@ -833,7 +950,6 @@ export async function GET(req: Request) {
 
   const role = (session.user.role ?? "").toLowerCase();
   const ownerId = role === "viewer" ? session.user.id : null;
-  const where = ownerId ? { ownerId } : undefined;
 
   try {
     const { searchParams } = new URL(req.url);
@@ -846,80 +962,11 @@ export async function GET(req: Request) {
     const prestadoDebtorFilters = parsePrestadoDebtorFilters(searchParams);
     const includeFacetOptions = parseIncludeFacetOptions(searchParams);
     const includeMeta = parseIncludeMeta(searchParams);
+    const metaOnly = parseMetaOnly(searchParams);
+    const includeFilterOptions = parseIncludeFilterOptions(searchParams, includeFacetOptions, includeMeta);
+    const includeStatusTotals = parseIncludeStatusTotals(searchParams, includeMeta);
+    const searchMode = parseSearchMode(searchParams);
     const searchTokens = searchFilter ? splitSearchTokens(searchFilter) : [];
-    const normalizedSearchToken = searchFilter ? normalizeSearchToken(searchFilter) : "";
-    const codeSearchMode = Boolean(searchFilter && isLikelyCodeSearch(searchFilter, normalizedSearchToken));
-
-    if (!includeMeta) {
-      const filteredSnapshot = await getInteractiveSearchSnapshot(ownerId);
-      let filtered = filteredSnapshot;
-
-      if (searchFilter) {
-        if (codeSearchMode) {
-          filtered = filtered.filter(
-            (row) =>
-              row.normalizedSku === normalizedSearchToken ||
-              row.normalizedMlItemId === normalizedSearchToken ||
-              row.normalizedSellerCustomField === normalizedSearchToken ||
-              row.normalizedSku.startsWith(normalizedSearchToken) ||
-              row.normalizedMlItemId.startsWith(normalizedSearchToken) ||
-              row.normalizedSellerCustomField.startsWith(normalizedSearchToken)
-          );
-        } else {
-          const tokenChecks = searchTokens.map((token) => ({
-            token,
-            year: parseSearchYearToken(token)
-          }));
-
-          filtered = filtered.filter((row) =>
-            tokenChecks.every(({ token, year }) => {
-              if (row.searchText.includes(token)) return true;
-              return year !== null && matchesYearRange(row.anoDesde, row.anoHasta, year);
-            })
-          );
-        }
-      }
-
-      if (marcaFilter) {
-        filtered = filtered.filter((row) => row.marca === marcaFilter);
-      }
-      if (cocheFilter) {
-        filtered = filtered.filter((row) => row.coche === cocheFilter);
-      }
-      if (piezaFilter) {
-        filtered = filtered.filter((row) => row.pieza === piezaFilter);
-      }
-      if (prestadoDebtorFilters.length) {
-        const debtorSet = new Set(prestadoDebtorFilters);
-        filtered = filtered.filter((row) => debtorSet.has(row.prestadoDebtor));
-      }
-
-      const statusTotals = buildStatusTotalsFromSnapshot(filtered);
-
-      if (statusFilter) {
-        filtered = filtered.filter((row) => row.statusInternal === statusFilter);
-      }
-
-      const total = filtered.length;
-      const visibleRows = filtered.slice(skip, skip + pageSize);
-      const serialized = visibleRows.map((rawRow) => {
-        const result = serializeInventoryItem(rawRow);
-        result.photoCount = Number(rawRow.photoCount ?? 0);
-        const previewSource = sanitizePhotosArray(rawRow.photoPreview, 1)[0] ?? null;
-        result.photoPreview = previewSource ? toInventoryPhotoClientSrc(rawRow.id, previewSource) : null;
-        return result;
-      });
-      const totalPages = Math.max(1, Math.ceil(total / pageSize));
-
-      return NextResponse.json({
-        page,
-        pageSize,
-        total,
-        totalPages,
-        statusTotals,
-        items: serialized
-      });
-    }
 
     const shouldUseLightweightSearch =
       searchTokens.length > 0 &&
@@ -927,20 +974,55 @@ export async function GET(req: Request) {
 
     const ownerSql = ownerId ? Prisma.sql`AND "ownerId" = ${ownerId}` : Prisma.empty;
     const statusSql = buildStatusFilterSql(statusFilter);
-    const searchSql = buildSearchFilterSql(searchFilter, { lightweight: shouldUseLightweightSearch });
+    const searchSql = buildSearchFilterSql(searchFilter, searchMode, { lightweight: shouldUseLightweightSearch });
     const marcaSql = buildMarcaFilterSql(marcaFilter);
     const cocheSql = buildCocheFilterSql(cocheFilter);
     const piezaSql = buildPiezaFilterSql(piezaFilter);
     const prestadoDebtorSql = buildPrestadoDebtorFilterSql(prestadoDebtorFilters);
+    const hasNonStatusFilters = Boolean(
+      searchFilter || marcaFilter || cocheFilter || piezaFilter || prestadoDebtorFilters.length
+    );
+    const shouldLoadPrestadoMetrics = statusFilter === "PRESTADO";
+
+    if (metaOnly) {
+      const [statusTotals, prestadoMetrics, facetOptions] = await Promise.all([
+        includeStatusTotals
+          ? hasNonStatusFilters
+            ? queryStatusTotalsWithFilters({
+                ownerSql,
+                searchSql,
+                marcaSql,
+                cocheSql,
+                piezaSql,
+                prestadoDebtorSql
+              })
+            : getStatusTotals(ownerId)
+          : Promise.resolve<Record<string, number> | null>(null),
+        includeStatusTotals && shouldLoadPrestadoMetrics
+          ? getPrestadoMetrics({ ownerSql, statusSql, searchSql, marcaSql, cocheSql, piezaSql, prestadoDebtorSql })
+          : Promise.resolve<PrestadoMetrics | null>(null),
+        includeFilterOptions
+          ? getInventoryFacetOptions({
+              ownerSql,
+              statusSql,
+              searchSql,
+              marcaSql,
+              cocheSql,
+              piezaSql,
+              prestadoDebtorSql,
+              statusFilter
+            })
+          : Promise.resolve<InventoryFacetOptions | null>(null)
+      ]);
+
+      return NextResponse.json({
+        statusTotals: includeStatusTotals ? statusTotals : undefined,
+        prestadoMetrics: includeStatusTotals ? prestadoMetrics : undefined,
+        facetOptions: includeFilterOptions ? facetOptions : undefined
+      });
+    }
 
     if (statusFilter || searchFilter || marcaFilter || cocheFilter || piezaFilter || prestadoDebtorFilters.length) {
-      const hasNoAdditionalFilters =
-        !statusFilter && !marcaFilter && !cocheFilter && !piezaFilter && !prestadoDebtorFilters.length;
-      const fastSearchMode = Boolean(searchFilter && hasNoAdditionalFilters && page === 1);
-      const fastCodeSearchMode = codeSearchMode && fastSearchMode;
-      const shouldUseFastCount = fastSearchMode || fastCodeSearchMode || !includeMeta;
-      const shouldLoadPrestadoMetrics = statusFilter === "PRESTADO";
-
       const [dataRows, countRows, statusTotals, prestadoMetrics, facetOptions] = await Promise.all([
         prisma.$queryRaw<InventoryListRow[]>(Prisma.sql`
           SELECT
@@ -970,29 +1052,36 @@ export async function GET(req: Request) {
           ${prestadoDebtorSql}
           ORDER BY "updatedAt" DESC
           OFFSET ${skip}
-          LIMIT ${shouldUseFastCount ? pageSize + 1 : pageSize}
+          LIMIT ${pageSize}
         `),
-        shouldUseFastCount
-          ? Promise.resolve<CountRow[]>([])
-          : prisma.$queryRaw<CountRow[]>(Prisma.sql`
-              SELECT COUNT(*) AS count
-              FROM "InventoryItem"
-              WHERE 1=1
-              ${ownerSql}
-              ${statusSql}
-              ${searchSql}
-              ${marcaSql}
-              ${cocheSql}
-              ${piezaSql}
-              ${prestadoDebtorSql}
-            `),
-        includeMeta
-          ? getStatusTotals(ownerId)
+        prisma.$queryRaw<CountRow[]>(Prisma.sql`
+          SELECT COUNT(*) AS count
+          FROM "InventoryItem"
+          WHERE 1=1
+          ${ownerSql}
+          ${statusSql}
+          ${searchSql}
+          ${marcaSql}
+          ${cocheSql}
+          ${piezaSql}
+          ${prestadoDebtorSql}
+        `),
+        includeStatusTotals
+          ? hasNonStatusFilters
+            ? queryStatusTotalsWithFilters({
+                ownerSql,
+                searchSql,
+                marcaSql,
+                cocheSql,
+                piezaSql,
+                prestadoDebtorSql
+              })
+            : getStatusTotals(ownerId)
           : Promise.resolve<Record<string, number> | null>(null),
-        includeMeta && shouldLoadPrestadoMetrics
+        includeStatusTotals && shouldLoadPrestadoMetrics
           ? getPrestadoMetrics({ ownerSql, statusSql, searchSql, marcaSql, cocheSql, piezaSql, prestadoDebtorSql })
           : Promise.resolve<PrestadoMetrics | null>(null),
-        includeMeta && includeFacetOptions
+        includeFilterOptions
           ? getInventoryFacetOptions({
               ownerSql,
               statusSql,
@@ -1006,15 +1095,8 @@ export async function GET(req: Request) {
           : Promise.resolve<InventoryFacetOptions | null>(null)
       ]);
 
-      const hasMoreFastRows = shouldUseFastCount && dataRows.length > pageSize;
-      const visibleRows = hasMoreFastRows ? dataRows.slice(0, pageSize) : dataRows;
-
-      const total = shouldUseFastCount
-        ? hasMoreFastRows
-          ? skip + pageSize + 1
-          : skip + visibleRows.length
-        : Number(countRows[0]?.count ?? 0);
-      const serialized = visibleRows.map((rawRow) => {
+      const total = Number(countRows[0]?.count ?? 0);
+      const serialized = dataRows.map((rawRow) => {
         const result = serializeInventoryItem(rawRow);
         result.photoCount = Number(rawRow.photoCount ?? 0);
         const previewSource = sanitizePhotosArray(rawRow.photoPreview, 1)[0] ?? null;
@@ -1028,14 +1110,12 @@ export async function GET(req: Request) {
         pageSize,
         total,
         totalPages,
-        statusTotals: includeMeta ? statusTotals : undefined,
-        prestadoMetrics: includeMeta ? prestadoMetrics : undefined,
-        facetOptions: includeMeta && includeFacetOptions ? facetOptions : undefined,
+        statusTotals: includeStatusTotals ? statusTotals : undefined,
+        prestadoMetrics: includeStatusTotals ? prestadoMetrics : undefined,
+        facetOptions: includeFilterOptions ? facetOptions : undefined,
         items: serialized
       });
     }
-
-    const shouldUseFastCount = !includeMeta;
 
     const [dataRows, countRows, statusTotals, facetOptions] = await Promise.all([
       prisma.$queryRaw<InventoryListRow[]>(Prisma.sql`
@@ -1060,42 +1140,34 @@ export async function GET(req: Request) {
         ${ownerSql}
         ORDER BY "updatedAt" DESC
         OFFSET ${skip}
-        LIMIT ${shouldUseFastCount ? pageSize + 1 : pageSize}
+        LIMIT ${pageSize}
       `),
-      shouldUseFastCount
-        ? Promise.resolve<CountRow[]>([])
-        : prisma.$queryRaw<CountRow[]>(Prisma.sql`
-            SELECT COUNT(*) AS count
-            FROM "InventoryItem"
-            WHERE 1=1
-            ${ownerSql}
-          `),
-      includeMeta
+      prisma.$queryRaw<CountRow[]>(Prisma.sql`
+        SELECT COUNT(*) AS count
+        FROM "InventoryItem"
+        WHERE 1=1
+        ${ownerSql}
+      `),
+      includeStatusTotals
         ? getStatusTotals(ownerId)
         : Promise.resolve<Record<string, number> | null>(null),
-      includeMeta && includeFacetOptions
+      includeFilterOptions
         ? getInventoryFacetOptions({
             ownerSql,
-            statusSql,
-            searchSql,
-            marcaSql,
-            cocheSql,
-            piezaSql,
-            prestadoDebtorSql,
-            statusFilter
+            statusSql: Prisma.empty,
+            searchSql: Prisma.empty,
+            marcaSql: Prisma.empty,
+            cocheSql: Prisma.empty,
+            piezaSql: Prisma.empty,
+            prestadoDebtorSql: Prisma.empty,
+            statusFilter: null
           })
         : Promise.resolve<InventoryFacetOptions | null>(null)
     ]);
 
-    const hasMoreFastRows = shouldUseFastCount && dataRows.length > pageSize;
-    const visibleRows = hasMoreFastRows ? dataRows.slice(0, pageSize) : dataRows;
-    const total = shouldUseFastCount
-      ? hasMoreFastRows
-        ? skip + pageSize + 1
-        : skip + visibleRows.length
-      : Number(countRows[0]?.count ?? 0);
+    const total = Number(countRows[0]?.count ?? 0);
 
-    const serialized = visibleRows.map((rawRow) => {
+    const serialized = dataRows.map((rawRow) => {
       const result = serializeInventoryItem(rawRow);
       result.photoCount = Number(rawRow.photoCount ?? 0);
       const previewSource = sanitizePhotosArray(rawRow.photoPreview, 1)[0] ?? null;
@@ -1109,8 +1181,8 @@ export async function GET(req: Request) {
       pageSize,
       total,
       totalPages,
-      statusTotals: includeMeta ? statusTotals : undefined,
-      facetOptions: includeMeta && includeFacetOptions ? facetOptions : undefined,
+      statusTotals: includeStatusTotals ? statusTotals : undefined,
+      facetOptions: includeFilterOptions ? facetOptions : undefined,
       items: serialized
     });
   } catch (err: any) {
