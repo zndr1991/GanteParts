@@ -2760,8 +2760,9 @@ export function InventoryClient({
   const getThumbnailSrc = useCallback(
     (item: Item) => {
       const version = thumbnailVersionById[item.id] ?? 0;
-      if (version === 0 && item.photoPreview && item.photoPreview.trim().length) {
-        return item.photoPreview;
+      // Siempre endpoint lazy: evita base64 embebido en listados.
+      if (item.photoCount != null && Number(item.photoCount) <= 0 && !(item.photoPreview ?? "").toString().trim()) {
+        return "";
       }
       return version > 0
         ? `/api/inventory/${item.id}/thumbnail?v=${version}`
@@ -4900,6 +4901,7 @@ export function InventoryClient({
 
     if (!hasSkippedInitialServerFetchRef.current) {
       hasSkippedInitialServerFetchRef.current = true;
+      // Solo saltar si SSR ya trajo filas utiles (shell vacio siempre carga por API).
       const hasInitialFilters =
         effectiveServerSearchTerm.length > 0 ||
         resolvedServerSearchMode !== "general" ||

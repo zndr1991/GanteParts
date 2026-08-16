@@ -456,6 +456,58 @@ type InventoryListRow = {
   updatedAt: Date;
 };
 
+// Proyecta solo campos de negocio. NO usa (extraData - 'photos') porque en Postgres
+// eso descomprime el JSON completo (incluye base64 de MB) y tarda segundos/decenas.
+const LEAN_EXTRA_DATA_SQL = Prisma.sql`
+  jsonb_strip_nulls(
+    jsonb_build_object(
+      'estatus_interno', "extraData"->>'estatus_interno',
+      'marca', "extraData"->>'marca',
+      'coche', "extraData"->>'coche',
+      'pieza', "extraData"->>'pieza',
+      'version', "extraData"->>'version',
+      'ano_desde', "extraData"->>'ano_desde',
+      'ano_hasta', "extraData"->>'ano_hasta',
+      'ubicacion', "extraData"->>'ubicacion',
+      'origen', "extraData"->>'origen',
+      'precio_compra', "extraData"->>'precio_compra',
+      'prestado_vendido_a', "extraData"->>'prestado_vendido_a',
+      'fecha_prestamo_pago', "extraData"->>'fecha_prestamo_pago',
+      'alto', "extraData"->>'alto',
+      'largo', "extraData"->>'largo',
+      'ancho', "extraData"->>'ancho',
+      'peso', "extraData"->>'peso',
+      'forma_publicacion', "extraData"->>'forma_publicacion',
+      'observaciones', "extraData"->>'observaciones',
+      'compatibilidades', "extraData"->>'compatibilidades',
+      'descripcion_local', "extraData"->>'descripcion_local',
+      'descripcion_ml', "extraData"->>'descripcion_ml',
+      'descripcion', "extraData"->>'descripcion',
+      'facebook', "extraData"->>'facebook',
+      'inventario', "extraData"->>'inventario',
+      'revision', "extraData"->>'revision',
+      'ml_status_reason', "extraData"->>'ml_status_reason',
+      'ml_status_reason_label', "extraData"->>'ml_status_reason_label',
+      'ml_fotos_sync_estado', "extraData"->>'ml_fotos_sync_estado',
+      'ml_fotos_sync_mensaje', "extraData"->>'ml_fotos_sync_mensaje',
+      'ml_app_status_sync_at', "extraData"->>'ml_app_status_sync_at',
+      'ml_app_status_sync_to', "extraData"->>'ml_app_status_sync_to',
+      'ml_app_status_sync_source', "extraData"->>'ml_app_status_sync_source',
+      'stock_antes_vendido', "extraData"->>'stock_antes_vendido'
+    )
+  )
+`;
+
+const PHOTO_COUNT_SQL = Prisma.sql`
+  COALESCE(
+    CASE
+      WHEN jsonb_typeof("extraData"->'photos') = 'array' THEN jsonb_array_length("extraData"->'photos')
+      ELSE 0
+    END,
+    0
+  )::int
+`;
+
 type CountRow = {
   count: number | bigint | string;
 };
@@ -873,18 +925,9 @@ const loadInteractiveSearchSnapshot = async (ownerId: string | null) => {
     SELECT
       "id", "skuInternal", "sellerCustomField", "title", "price", "stock",
       "status", "mlItemId",
-      CASE
-        WHEN jsonb_typeof("extraData"->'photos') = 'array' THEN "extraData"->'photos'->0
-        ELSE NULL
-      END AS "photoPreview",
-      ("extraData" - 'photos') AS "extraData",
-      COALESCE(
-        CASE
-          WHEN jsonb_typeof("extraData"->'photos') = 'array' THEN jsonb_array_length("extraData"->'photos')
-          ELSE 0
-        END,
-        0
-      )::int AS "photoCount",
+      NULL AS "photoPreview",
+      ${LEAN_EXTRA_DATA_SQL} AS "extraData",
+      ${PHOTO_COUNT_SQL} AS "photoCount",
       "createdAt", "updatedAt"
     FROM "InventoryItem"
     WHERE 1=1
@@ -1028,18 +1071,9 @@ export async function GET(req: Request) {
           SELECT
             "id", "skuInternal", "sellerCustomField", "title", "price", "stock",
             "status", "mlItemId",
-            CASE
-              WHEN jsonb_typeof("extraData"->'photos') = 'array' THEN "extraData"->'photos'->0
-              ELSE NULL
-            END AS "photoPreview",
-            ("extraData" - 'photos') AS "extraData",
-            COALESCE(
-              CASE
-                WHEN jsonb_typeof("extraData"->'photos') = 'array' THEN jsonb_array_length("extraData"->'photos')
-                ELSE 0
-              END,
-              0
-            )::int AS "photoCount",
+            NULL AS "photoPreview",
+            ${LEAN_EXTRA_DATA_SQL} AS "extraData",
+            ${PHOTO_COUNT_SQL} AS "photoCount",
             "createdAt", "updatedAt"
           FROM "InventoryItem"
           WHERE 1=1
@@ -1099,8 +1133,8 @@ export async function GET(req: Request) {
       const serialized = dataRows.map((rawRow) => {
         const result = serializeInventoryItem(rawRow);
         result.photoCount = Number(rawRow.photoCount ?? 0);
-        const previewSource = sanitizePhotosArray(rawRow.photoPreview, 1)[0] ?? null;
-        result.photoPreview = previewSource ? toInventoryPhotoClientSrc(rawRow.id, previewSource) : null;
+        // Miniatura por endpoint lazy; no embebemos base64 en el listado.
+        result.photoPreview = result.photoCount > 0 ? `/api/inventory/${rawRow.id}/thumbnail` : null;
         return result;
       });
       const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -1122,18 +1156,9 @@ export async function GET(req: Request) {
         SELECT
           "id", "skuInternal", "sellerCustomField", "title", "price", "stock",
           "status", "mlItemId",
-          CASE
-            WHEN jsonb_typeof("extraData"->'photos') = 'array' THEN "extraData"->'photos'->0
-            ELSE NULL
-          END AS "photoPreview",
-          ("extraData" - 'photos') AS "extraData",
-          COALESCE(
-            CASE
-              WHEN jsonb_typeof("extraData"->'photos') = 'array' THEN jsonb_array_length("extraData"->'photos')
-              ELSE 0
-            END,
-            0
-          )::int AS "photoCount",
+          NULL AS "photoPreview",
+          ${LEAN_EXTRA_DATA_SQL} AS "extraData",
+          ${PHOTO_COUNT_SQL} AS "photoCount",
           "createdAt", "updatedAt"
         FROM "InventoryItem"
         WHERE 1=1
@@ -1170,8 +1195,7 @@ export async function GET(req: Request) {
     const serialized = dataRows.map((rawRow) => {
       const result = serializeInventoryItem(rawRow);
       result.photoCount = Number(rawRow.photoCount ?? 0);
-      const previewSource = sanitizePhotosArray(rawRow.photoPreview, 1)[0] ?? null;
-      result.photoPreview = previewSource ? toInventoryPhotoClientSrc(rawRow.id, previewSource) : null;
+      result.photoPreview = result.photoCount > 0 ? `/api/inventory/${rawRow.id}/thumbnail` : null;
       return result;
     });
     const totalPages = Math.max(1, Math.ceil(total / pageSize));

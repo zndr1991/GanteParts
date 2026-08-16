@@ -120,15 +120,38 @@ const queryStatusTotals = async (ownerId: string | null) => {
 const loadLightweightInitialRows = async (ownerId: string | null, take: number) => {
   const ownerSql = ownerId ? Prisma.sql`AND "ownerId" = ${ownerId}` : Prisma.empty;
 
+  // Nunca leer photos[0] aqui: en prod son base64 de ~0.2-2MB c/u y rompen SSR/API.
   const rows = await prisma.$queryRaw<InventoryListRow[]>(Prisma.sql`
     SELECT
       "id", "skuInternal", "sellerCustomField", "title", "price", "stock",
       "status", "mlItemId",
-      CASE
-        WHEN jsonb_typeof("extraData"->'photos') = 'array' THEN "extraData"->'photos'->0
-        ELSE NULL
-      END AS "photoPreview",
-      ("extraData" - 'photos') AS "extraData",
+      NULL AS "photoPreview",
+      jsonb_strip_nulls(
+        jsonb_build_object(
+          'estatus_interno', "extraData"->>'estatus_interno',
+          'marca', "extraData"->>'marca',
+          'coche', "extraData"->>'coche',
+          'pieza', "extraData"->>'pieza',
+          'version', "extraData"->>'version',
+          'ano_desde', "extraData"->>'ano_desde',
+          'ano_hasta', "extraData"->>'ano_hasta',
+          'ubicacion', "extraData"->>'ubicacion',
+          'origen', "extraData"->>'origen',
+          'precio_compra', "extraData"->>'precio_compra',
+          'prestado_vendido_a', "extraData"->>'prestado_vendido_a',
+          'fecha_prestamo_pago', "extraData"->>'fecha_prestamo_pago',
+          'alto', "extraData"->>'alto',
+          'largo', "extraData"->>'largo',
+          'ancho', "extraData"->>'ancho',
+          'peso', "extraData"->>'peso',
+          'forma_publicacion', "extraData"->>'forma_publicacion',
+          'observaciones', "extraData"->>'observaciones',
+          'compatibilidades', "extraData"->>'compatibilidades',
+          'descripcion_local', "extraData"->>'descripcion_local',
+          'descripcion_ml', "extraData"->>'descripcion_ml',
+          'facebook', "extraData"->>'facebook'
+        )
+      ) AS "extraData",
       COALESCE(
         CASE
           WHEN jsonb_typeof("extraData"->'photos') = 'array' THEN jsonb_array_length("extraData"->'photos')
@@ -144,7 +167,12 @@ const loadLightweightInitialRows = async (ownerId: string | null, take: number) 
     LIMIT ${take}
   `);
 
-  return rows.map((row) => serializeInventoryListRow(row) as InventoryClientItem);
+  return rows.map((row) => {
+    const item = serializeInventoryListRow(row) as InventoryClientItem;
+    const photoCount = Number(item.photoCount ?? 0);
+    item.photoPreview = photoCount > 0 ? `/api/inventory/${item.id}/thumbnail` : null;
+    return item;
+  });
 };
 
 const fetchInventorySnapshot = unstable_cache(

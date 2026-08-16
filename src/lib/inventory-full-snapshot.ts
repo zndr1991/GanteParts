@@ -88,8 +88,13 @@ const buildStatusTotals = (items: InventorySnapshotItem[]) => {
 export const serializeInventoryListRow = (rawRow: InventoryListRow): InventorySnapshotItem => {
   const result = serializeInventoryItem(rawRow) as InventorySnapshotItem;
   result.photoCount = Number(rawRow.photoCount ?? 0);
-  const previewSource = sanitizePhotosArray(rawRow.photoPreview, 1)[0] ?? null;
-  result.photoPreview = previewSource ? toInventoryPhotoClientSrc(rawRow.id, previewSource) : null;
+  // No embeber base64: miniatura por endpoint cuando hay fotos.
+  if (result.photoCount > 0) {
+    result.photoPreview = `/api/inventory/${rawRow.id}/thumbnail`;
+  } else {
+    const previewSource = sanitizePhotosArray(rawRow.photoPreview, 1)[0] ?? null;
+    result.photoPreview = previewSource ? toInventoryPhotoClientSrc(rawRow.id, previewSource) : null;
+  }
   return result;
 };
 
@@ -116,11 +121,33 @@ const loadInventoryFullSnapshot = async (ownerId: string | null): Promise<Invent
     SELECT
       "id", "skuInternal", "sellerCustomField", "title", "price", "stock",
       "status", "mlItemId",
-      CASE
-        WHEN jsonb_typeof("extraData"->'photos') = 'array' THEN "extraData"->'photos'->0
-        ELSE NULL
-      END AS "photoPreview",
-      ("extraData" - 'photos') AS "extraData",
+      NULL AS "photoPreview",
+      jsonb_strip_nulls(
+        jsonb_build_object(
+          'estatus_interno', "extraData"->>'estatus_interno',
+          'marca', "extraData"->>'marca',
+          'coche', "extraData"->>'coche',
+          'pieza', "extraData"->>'pieza',
+          'version', "extraData"->>'version',
+          'ano_desde', "extraData"->>'ano_desde',
+          'ano_hasta', "extraData"->>'ano_hasta',
+          'ubicacion', "extraData"->>'ubicacion',
+          'origen', "extraData"->>'origen',
+          'precio_compra', "extraData"->>'precio_compra',
+          'prestado_vendido_a', "extraData"->>'prestado_vendido_a',
+          'fecha_prestamo_pago', "extraData"->>'fecha_prestamo_pago',
+          'alto', "extraData"->>'alto',
+          'largo', "extraData"->>'largo',
+          'ancho', "extraData"->>'ancho',
+          'peso', "extraData"->>'peso',
+          'forma_publicacion', "extraData"->>'forma_publicacion',
+          'observaciones', "extraData"->>'observaciones',
+          'compatibilidades', "extraData"->>'compatibilidades',
+          'descripcion_local', "extraData"->>'descripcion_local',
+          'descripcion_ml', "extraData"->>'descripcion_ml',
+          'facebook', "extraData"->>'facebook'
+        )
+      ) AS "extraData",
       COALESCE(
         CASE
           WHEN jsonb_typeof("extraData"->'photos') = 'array' THEN jsonb_array_length("extraData"->'photos')
@@ -136,7 +163,11 @@ const loadInventoryFullSnapshot = async (ownerId: string | null): Promise<Invent
     ${limitSql}
   `);
 
-  const items = rows.map(serializeInventoryListRow);
+  const items = rows.map((row) => {
+    const item = serializeInventoryListRow(row);
+    item.photoPreview = item.photoCount > 0 ? `/api/inventory/${item.id}/thumbnail` : null;
+    return item;
+  });
   return {
     items,
     total,

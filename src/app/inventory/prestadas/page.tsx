@@ -4,17 +4,15 @@ import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
 
 import { InventoryClient } from "../client";
-import type { InventoryClientItem, InventoryInitialPage } from "../client";
-import { getInventorySnapshot } from "@/lib/inventory-cache";
+import type { InventoryInitialPage } from "../client";
 
-const DEFAULT_INITIAL_PAGE_SIZE = 50;
-const INVENTORY_INITIAL_PAGE_SIZE_ENV = Number(
-  process.env.INVENTORY_INITIAL_LOAD_LIMIT ?? process.env.INVENTORY_FULL_LOAD_LIMIT ?? `${DEFAULT_INITIAL_PAGE_SIZE}`
-);
-const INVENTORY_INITIAL_PAGE_SIZE =
-  Number.isFinite(INVENTORY_INITIAL_PAGE_SIZE_ENV) && INVENTORY_INITIAL_PAGE_SIZE_ENV > 0
-    ? Math.min(INVENTORY_INITIAL_PAGE_SIZE_ENV, DEFAULT_INITIAL_PAGE_SIZE)
-    : DEFAULT_INITIAL_PAGE_SIZE;
+const EMPTY_INITIAL_PAGE: InventoryInitialPage = {
+  items: [],
+  page: 1,
+  pageSize: 100,
+  total: 0,
+  statusTotals: {}
+};
 
 export default async function PrestadasInventoryPage() {
   const session = await auth();
@@ -22,26 +20,12 @@ export default async function PrestadasInventoryPage() {
     redirect("/login");
   }
 
-  const role = (session.user.role ?? "").toLowerCase();
-  const ownerId = role === "viewer" ? session.user.id : null;
-  const { items, total, statusTotals, complete } = await getInventorySnapshot(ownerId, INVENTORY_INITIAL_PAGE_SIZE);
-  const plainItems = items as InventoryClientItem[];
-  const initialPageSize = plainItems.length || INVENTORY_INITIAL_PAGE_SIZE;
-
-  const initialPage: InventoryInitialPage = {
-    items: plainItems,
-    page: 1,
-    pageSize: initialPageSize,
-    total,
-    statusTotals
-  };
-
   return (
     <InventoryClient
-      initialPage={initialPage}
+      initialPage={EMPTY_INITIAL_PAGE}
       userRole={session.user.role ?? "operator"}
       initialStatusFilter="PRESTADO"
-      initialDatasetComplete={complete}
+      initialDatasetComplete={false}
     />
   );
 }
