@@ -1,6 +1,7 @@
 import { unstable_cache } from "next/cache";
+import { Prisma } from "@prisma/client";
 import type { InventoryClientItem } from "@/app/inventory/client";
-import { getCachedInventoryFullSnapshot, getInventoryFullSnapshot } from "@/lib/inventory-full-snapshot";
+import { getCachedInventoryFullSnapshot, serializeInventoryListRow, type InventoryListRow } from "@/lib/inventory-full-snapshot";
 import { prisma } from "@/lib/prisma";
 import { serializeInventoryItem } from "@/lib/inventory-serialization";
 import { fetchInventoryItemsSafely } from "@/lib/inventory-safe-load";
@@ -39,6 +40,36 @@ const buildStatusTotalsFromItems = (items: InventoryClientItem[]) => {
   return totals;
 };
 
+const loadLightweightInitialRows = async (ownerId: string | null, take: number) => {
+  const ownerSql = ownerId ? Prisma.sql`AND "ownerId" = ${ownerId}` : Prisma.empty;
+
+  const rows = await prisma.$queryRaw<InventoryListRow[]>(Prisma.sql`
+    SELECT
+      "id", "skuInternal", "sellerCustomField", "title", "price", "stock",
+      "status", "mlItemId",
+      CASE
+        WHEN jsonb_typeof("extraData"->'photos') = 'array' THEN "extraData"->'photos'->0
+        ELSE NULL
+      END AS "photoPreview",
+      ("extraData" - 'photos') AS "extraData",
+      COALESCE(
+        CASE
+          WHEN jsonb_typeof("extraData"->'photos') = 'array' THEN jsonb_array_length("extraData"->'photos')
+          ELSE 0
+        END,
+        0
+      )::int AS "photoCount",
+      "createdAt", "updatedAt"
+    FROM "InventoryItem"
+    WHERE 1=1
+    ${ownerSql}
+    ORDER BY "updatedAt" DESC
+    LIMIT ${take}
+  `);
+
+  return rows.map((row) => serializeInventoryListRow(row) as InventoryClientItem);
+};
+
 export const getInventorySnapshot = async (ownerId: string | null, take?: number) => {
   const snapshot = getCachedInventoryFullSnapshot(ownerId);
   if (snapshot) {
@@ -52,35 +83,49 @@ export const getInventorySnapshot = async (ownerId: string | null, take?: number
     };
   }
 
-  // Calienta snapshot completo para requests subsecuentes sin bloquear esta respuesta SSR.
-  void getInventoryFullSnapshot(ownerId).catch(() => undefined);
-
   const where = resolveSnapshotWhere(ownerId);
   const requested = resolveRequestedTake(take ?? MAX_CACHE_TAKE);
-  const [total, safeItems] = await Promise.all([
-    prisma.inventoryItem.count({ where }),
-    fetchInventoryItemsSafely({
-      where,
-      take: requested
-    })
-  ]);
 
-  const plainItems = safeItems.items.map((item) => serializeInventoryItem(item) as InventoryClientItem);
-  const truncated = plainItems.length < total;
-  const statusTotals = buildStatusTotalsFromItems(plainItems);
+  try {
+    const [total, plainItems] = await Promise.all([
+      prisma.inventoryItem.count({ where }),
+      loadLightweightInitialRows(ownerId, requested)
+    ]);
 
-  if (safeItems.skippedIds.length) {
-    console.error(`Inventory snapshot omitio ${safeItems.skippedIds.length} registros con texto invalido`);
+    const truncated = plainItems.length < total;
+    return {
+      items: plainItems,
+      total,
+      statusTotals: buildStatusTotalsFromItems(plainItems),
+      skippedCount: 0,
+      complete: !truncated,
+      truncated
+    };
+  } catch (error) {
+    const [total, safeItems] = await Promise.all([
+      prisma.inventoryItem.count({ where }),
+      fetchInventoryItemsSafely({
+        where,
+        take: requested
+      })
+    ]);
+
+    const plainItems = safeItems.items.map((item) => serializeInventoryItem(item) as InventoryClientItem);
+    const truncated = plainItems.length < total;
+    if (safeItems.skippedIds.length) {
+      console.error(`Inventory snapshot omitio ${safeItems.skippedIds.length} registros con texto invalido`);
+    }
+    console.error("Fallback a safe snapshot en inventario", error);
+
+    return {
+      items: plainItems,
+      total,
+      statusTotals: buildStatusTotalsFromItems(plainItems),
+      skippedCount: safeItems.skippedIds.length,
+      complete: !truncated,
+      truncated
+    };
   }
-
-  return {
-    items: plainItems,
-    total,
-    statusTotals,
-    skippedCount: safeItems.skippedIds.length,
-    complete: !truncated,
-    truncated
-  };
 };
 
 const fetchManualInventorySnapshot = unstable_cache(

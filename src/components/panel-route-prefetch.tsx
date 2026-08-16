@@ -21,8 +21,11 @@ export function PanelRoutePrefetch({ routes }: PanelRoutePrefetchProps) {
       });
 
       if (routes.some((route) => route === "/inventory" || route.startsWith("/inventory/"))) {
-        void fetch("/api/inventory/all", { cache: "no-store", credentials: "same-origin" }).catch(() => {
-          // Prefetch best-effort: si falla, /inventory igual hidrata al entrar.
+        void fetch("/api/inventory?page=1&pageSize=1&includeMeta=0", {
+          cache: "no-store",
+          credentials: "same-origin"
+        }).catch(() => {
+          // Warm-up ligero best-effort: evita forzar carga completa en segundo plano.
         });
       }
     };
